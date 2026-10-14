@@ -14,4 +14,4 @@
 - Centralize identity and API configuration in src/lib/brand.ts and visual tokens in src/styles.css so future rebranding stays isolated.
 - Keep sample records in src/lib/preview-fixtures.ts and visibly label them so production components never imply real activity.
 - Use shared Gogaa Byte components for brand, loading states, and workspace layout; navigation for unbuilt sections opens explicit preview dialogs rather than nonexistent pages.
-- The public index is the dashboard design preview, /login is the unconnected form, and /loader is the isolated loading-state gallery; none establishes an authenticated session.
+- The public index is the dashboard design preview, /login is the unconnected form, and /loading is the isolated loading-state gallery; none establishes an authenticated session. Avoid naming routes loader.tsx because the route generator treats loader as a reserved suffix.
