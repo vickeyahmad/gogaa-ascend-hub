@@ -22,8 +22,15 @@ import {
   CircleHelp,
   LogOut,
   ShieldCheck,
+  AlertCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -62,31 +69,45 @@ const navigation = [
   },
 ];
 
+export interface AppShellProps {
+  children: ReactNode;
+  search?: string;
+  onSearch?: (value: string) => void;
+  activeItem?: 'Dashboard' | 'Categories' | string;
+  pageTitle?: string;
+  breadcrumbs?: { label: string; href?: string }[];
+  searchPlaceholder?: string;
+  showSearch?: boolean;
+}
+
 export function AppShell({
   children,
-  search,
+  search = '',
   onSearch,
-}: {
-  children: ReactNode;
-  search: string;
-  onSearch: (value: string) => void;
-}) {
+  activeItem = 'Dashboard',
+  pageTitle = 'Dashboard',
+  breadcrumbs,
+  searchPlaceholder = 'Search preview orders...',
+  showSearch = true,
+}: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobile, setMobile] = useState(false);
   const [dialog, setDialog] = useState<string | null>(null);
-  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
-  const { user, logout } = useAuth();
+  const { user, logout, isLoggingOut } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
-    if (loggingOut) return;
-    setLoggingOut(true);
+    if (isLoggingOut) return;
+    setLogoutError(null);
     try {
       await logout();
       void navigate({ to: '/login' });
-    } finally {
-      setLoggingOut(false);
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Sign out failed. Please try again.';
+      setLogoutError(msg);
     }
   };
 
@@ -125,12 +146,16 @@ export function AppShell({
                 <Button
                   variant="nav"
                   key={item.name}
-                  className={item.name === 'Dashboard' ? 'active' : ''}
-                  aria-current={item.name === 'Dashboard' ? 'page' : undefined}
-                  title={item.name === 'Dashboard' ? item.name : `${item.name} — preview`}
+                  className={item.name === activeItem ? 'active' : ''}
+                  aria-current={item.name === activeItem ? 'page' : undefined}
+                  title={item.name === 'Dashboard' || item.name === 'Categories' ? item.name : `${item.name} — preview`}
                   onClick={() => {
                     setMobile(false);
-                    if (item.name !== 'Dashboard') {
+                    if (item.name === 'Dashboard') {
+                      void navigate({ to: '/' });
+                    } else if (item.name === 'Categories') {
+                      void navigate({ to: '/categories' });
+                    } else {
                       setDialog(`${item.name} · Coming in a future phase`);
                     }
                   }}
@@ -191,25 +216,38 @@ export function AppShell({
               <Menu />
             </Button>
             <div className="min-w-0">
-              <h2>Dashboard</h2>
+              <h2>{pageTitle}</h2>
               <div className="breadcrumbs">
-                <span>Control Center</span>
-                <ChevronRight />
-                <span>Overview</span>
+                {breadcrumbs ? (
+                  breadcrumbs.map((crumb, idx) => (
+                    <span key={crumb.label} className="inline-flex items-center gap-1.5">
+                      {idx > 0 && <ChevronRight className="w-2.5 h-2.5 inline" />}
+                      <span>{crumb.label}</span>
+                    </span>
+                  ))
+                ) : (
+                  <>
+                    <span>Control Center</span>
+                    <ChevronRight />
+                    <span>Overview</span>
+                  </>
+                )}
               </div>
             </div>
           </div>
 
           <div className="header-right">
-            <label className="search-wrap">
-              <Search />
-              <input
-                placeholder="Search preview orders..."
-                aria-label="Search preview orders"
-                value={search}
-                onChange={(e) => onSearch(e.target.value)}
-              />
-            </label>
+            {showSearch && onSearch && (
+              <label className="search-wrap">
+                <Search />
+                <input
+                  placeholder={searchPlaceholder}
+                  aria-label={searchPlaceholder}
+                  value={search}
+                  onChange={(e) => onSearch(e.target.value)}
+                />
+              </label>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -262,12 +300,16 @@ export function AppShell({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onSelect={handleLogout}
-                  disabled={loggingOut}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    void handleLogout();
+                  }}
+                  disabled={isLoggingOut}
                   className="cursor-pointer text-destructive focus:text-destructive"
+                  data-testid="sign-out-menu-item"
                 >
                   <LogOut />
-                  <span>{loggingOut ? 'Signing out...' : 'Sign Out'}</span>
+                  <span>{isLoggingOut ? 'Signing out...' : 'Sign Out'}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -277,6 +319,26 @@ export function AppShell({
       </div>
 
       <PreviewDialog title={dialog} onClose={() => setDialog(null)} />
+
+      {logoutError && (
+        <Dialog open={!!logoutError} onOpenChange={() => setLogoutError(null)}>
+          <DialogContent>
+            <div className="dialog-symbol bg-destructive/10 text-destructive">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <DialogTitle>Sign Out Unsuccessful</DialogTitle>
+            <DialogDescription>{logoutError}</DialogDescription>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setLogoutError(null)}>
+                Dismiss
+              </Button>
+              <Button variant="brand" onClick={() => void handleLogout()}>
+                Retry Sign Out
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

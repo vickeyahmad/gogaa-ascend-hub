@@ -212,4 +212,293 @@ describe('API Client', () => {
       /Unable to connect to the Gogaa Byte server/,
     );
   });
+
+  describe('CSRF Retry Safety Policy', () => {
+    it('safely retries empty 400 on admin logout endpoint with fresh CSRF token', async () => {
+      setInMemoryCsrfToken('stale-token');
+
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        // 1. Initial logout request fails with empty 400 (ASP.NET Core antiforgery rejection)
+        .mockResolvedValueOnce(new Response('', { status: 400 }))
+        // 2. Refresh CSRF token
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: 'Antiforgery token generated.',
+              data: 'fresh-logout-token',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+        // 3. Retry of logout succeeds
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: 'Logout successful.',
+              data: null,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        );
+
+      const result = await apiRequest('/api/admin/auth/logout', {
+        method: 'POST',
+      });
+
+      expect(result.success).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect(getInMemoryCsrfToken()).toBe('fresh-logout-token');
+    });
+
+    it('does NOT retry empty 400 on arbitrary mutation endpoints', async () => {
+      setInMemoryCsrfToken('some-token');
+
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response('', { status: 400 }));
+
+      await expect(
+        apiRequest('/api/admin/categories', {
+          method: 'POST',
+          body: JSON.stringify({ name: 'Accessories' }),
+        }),
+      ).rejects.toThrow();
+
+      // Only 1 attempt made: arbitrary empty 400 is never retried
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT retry empty 400 on DELETE requests', async () => {
+      setInMemoryCsrfToken('some-token');
+
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response('', { status: 400 }));
+
+      await expect(
+        apiRequest('/api/admin/categories/cat-123', {
+          method: 'DELETE',
+        }),
+      ).rejects.toThrow();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('safely retries non-financial endpoints when server explicitly returns an antiforgery error', async () => {
+      setInMemoryCsrfToken('stale-token');
+
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        // 1. Initial POST returns explicit CSRF error
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              success: false,
+              message: 'Antiforgery token validation failed.',
+              data: null,
+            }),
+            { status: 400, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+        // 2. Fetch fresh token
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: 'Antiforgery token generated.',
+              data: 'refreshed-category-token',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+        // 3. Retry succeeds
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              success: true,
+              message: 'Category created.',
+              data: { id: 'cat-new', name: 'Electronics' },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        );
+
+      const result = await apiRequest('/api/admin/categories', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Electronics' }),
+      });
+
+      expect(result.success).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect(getInMemoryCsrfToken()).toBe('refreshed-category-token');
+    });
+
+    it('never retries financial wallet operations even on explicit CSRF error', async () => {
+      setInMemoryCsrfToken('valid-token');
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: 'Antiforgery token mismatch.',
+            data: null,
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await expect(
+        apiRequest('/api/wallet/transfer', {
+          method: 'POST',
+          body: JSON.stringify({ amount: 1500, recipient: 'user-2' }),
+        }),
+      ).rejects.toThrow('Antiforgery token mismatch.');
+
+      // Strictly 1 call made, never replayed
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('never retries deposit operations even on empty 400', async () => {
+      setInMemoryCsrfToken('valid-token');
+
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response('', { status: 400 }));
+
+      await expect(
+        apiRequest('/api/admin/deposits/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ depositId: 'dep-101' }),
+        }),
+      ).rejects.toThrow();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('never retries payment approval operations even on explicit CSRF error', async () => {
+      setInMemoryCsrfToken('valid-token');
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: 'Antiforgery verification failed',
+            data: null,
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await expect(
+        apiRequest('/api/admin/payments/pay-789/approval', {
+          method: 'POST',
+          body: JSON.stringify({ approved: true }),
+        }),
+      ).rejects.toThrow('Antiforgery verification failed');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('never retries order creation or checkout mutations', async () => {
+      setInMemoryCsrfToken('valid-token');
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: 'CSRF token is expired',
+            data: null,
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await expect(
+        apiRequest('/api/orders/create', {
+          method: 'POST',
+          body: JSON.stringify({ items: [{ id: 1, quantity: 2 }] }),
+        }),
+      ).rejects.toThrow('CSRF token is expired');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('never retries vendor submissions even on explicit CSRF error', async () => {
+      setInMemoryCsrfToken('valid-token');
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: 'Antiforgery cookie missing.',
+            data: null,
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await expect(
+        apiRequest('/api/vendor/register', {
+          method: 'POST',
+          body: JSON.stringify({ businessName: 'Acme Corp' }),
+        }),
+      ).rejects.toThrow('Antiforgery cookie missing.');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT retry structured model validation errors even if a field is named csrfToken', async () => {
+      setInMemoryCsrfToken('valid-token');
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            type: 'https://tools.ietf.org/html/rfc7231#section-6.5.1',
+            title: 'One or more validation errors occurred.',
+            status: 400,
+            errors: {
+              csrfToken: ['The csrfToken field is required.'],
+            },
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await expect(
+        apiRequest('/api/admin/categories', {
+          method: 'POST',
+          body: JSON.stringify({ name: '' }),
+        }),
+      ).rejects.toThrow();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT retry ordinary 400 business errors with generic messages', async () => {
+      setInMemoryCsrfToken('valid-token');
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: 'Category with this slug already exists in the system.',
+            data: null,
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await expect(
+        apiRequest('/api/admin/categories', {
+          method: 'POST',
+          body: JSON.stringify({ name: 'Phones', slug: 'phones' }),
+        }),
+      ).rejects.toThrow('Category with this slug already exists in the system.');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });

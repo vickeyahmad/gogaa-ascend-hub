@@ -41,6 +41,21 @@ export function getInMemoryCsrfToken(): string | null {
 }
 
 /**
+ * Endpoints that must NEVER be automatically retried, even on suspected CSRF errors.
+ * Financial mutations, deposits, payments, payment approvals, order creation,
+ * checkout, and vendor submissions must never be blindly replayed to prevent double-charging or duplicate actions.
+ */
+export const NON_RETRYABLE_MUTATION_PATTERNS: readonly RegExp[] = [
+  /\/wallet/i,
+  /\/payment/i,
+  /\/deposit/i,
+  /\/order/i,
+  /\/vendor/i,
+  /\/approval/i,
+  /\/checkout/i,
+];
+
+/**
  * Builds the full URL for an API endpoint using the configured base URL.
  * If baseUrl is empty, returns relative path (uses same-origin dev proxy).
  */
@@ -138,39 +153,101 @@ export async function apiRequest<T = unknown>(
     );
   }
 
-  // Handle distinguishing CSRF failure (HTTP 400 with antiforgery error)
-  // Only retry once if CSRF token expired and it is safe to do so
+  // Handle distinguishing CSRF failure (HTTP 400 with explicit antiforgery error or empty body on parameterless logout)
+  // Only retry once if CSRF token expired or identity changed, and it is strictly safe to do so.
   if (response.status === 400 && shouldAttachCsrf) {
-    const clone = response.clone();
-    let bodyText = '';
-    try {
-      bodyText = await clone.text();
-    } catch {
-      // ignore
-    }
+    const isNonRetryable = NON_RETRYABLE_MUTATION_PATTERNS.some((pattern) =>
+      pattern.test(endpoint),
+    );
 
-    const isCsrfError =
-      bodyText.toLowerCase().includes('antiforgery') ||
-      bodyText.toLowerCase().includes('xsrf') ||
-      bodyText.toLowerCase().includes('csrf');
-
-    if (isCsrfError) {
-      clearCsrfToken();
-      const freshToken = await getCsrfToken(true);
-      headers.set('X-XSRF-TOKEN', freshToken);
+    // Never replay financial or sensitive mutations under any circumstances
+    if (!isNonRetryable) {
+      const clone = response.clone();
+      let bodyText = '';
+      let isJson = false;
+      let hasValidationErrors = false;
+      let isExplicitCsrfError = false;
 
       try {
-        response = await fetch(url, {
-          ...options,
-          method,
-          headers,
-          credentials: 'include',
-        });
-      } catch (_retryErr) {
-        throw new ApiClientError(
-          'Unable to reach the Gogaa Byte server during request retry.',
-          0,
-        );
+        bodyText = await clone.text();
+        const parsed = JSON.parse(bodyText);
+        isJson = true;
+        if (parsed && typeof parsed === 'object') {
+          // Check for structured validation errors (e.g. from ASP.NET Core FluentValidation or ModelState)
+          const hasErrorsProperty = !!(
+            parsed.errors &&
+            typeof parsed.errors === 'object' &&
+            Object.keys(parsed.errors).length > 0
+          );
+
+          const messageStr =
+            typeof parsed.message === 'string' ? parsed.message.toLowerCase() : '';
+          const titleStr =
+            typeof parsed.title === 'string' ? parsed.title.toLowerCase() : '';
+
+          const containsCsrfKeyword =
+            messageStr.includes('antiforgery') ||
+            messageStr.includes('xsrf') ||
+            messageStr.includes('csrf') ||
+            titleStr.includes('antiforgery') ||
+            titleStr.includes('xsrf') ||
+            titleStr.includes('csrf');
+
+          if (hasErrorsProperty) {
+            hasValidationErrors = true;
+          } else if (containsCsrfKeyword) {
+            isExplicitCsrfError = true;
+          } else if (parsed.message || parsed.title) {
+            // General business or validation error message
+            hasValidationErrors = true;
+          }
+        }
+      } catch {
+        isJson = false;
+        const lower = bodyText.toLowerCase();
+        if (
+          lower.includes('antiforgery') ||
+          lower.includes('xsrf') ||
+          lower.includes('csrf')
+        ) {
+          isExplicitCsrfError = true;
+        }
+      }
+
+      // In ASP.NET Core, AutoValidateAntiforgeryTokenAttribute returns an empty 400 Bad Request
+      const isEmptyBadRequest = !bodyText || bodyText.trim().length === 0;
+
+      // Admin Logout endpoint: parameterless, idempotent endpoint that safely rejects on stale CSRF
+      const isLogoutEndpoint = endpoint.includes('/api/admin/auth/logout');
+
+      // STRICT RETRY SAFETY POLICY:
+      // 1. Admin Logout allows retry on empty 400 (ASP.NET Core antiforgery rejection) or explicit CSRF failure.
+      // 2. Arbitrary endpoints DO NOT retry merely on empty 400.
+      // 3. Safe non-financial endpoints ONLY retry if CSRF failure is unambiguously identified by server response text.
+      // 4. Model validation errors and ordinary 400 errors NEVER trigger retry.
+      const canRetry =
+        !hasValidationErrors &&
+        ((isLogoutEndpoint && (isEmptyBadRequest || isExplicitCsrfError)) ||
+          (!isLogoutEndpoint && isExplicitCsrfError));
+
+      if (canRetry) {
+        clearCsrfToken();
+        const freshToken = await getCsrfToken(true);
+        headers.set('X-XSRF-TOKEN', freshToken);
+
+        try {
+          response = await fetch(url, {
+            ...options,
+            method,
+            headers,
+            credentials: 'include',
+          });
+        } catch (_retryErr) {
+          throw new ApiClientError(
+            'Unable to reach the Gogaa Byte server during request retry.',
+            0,
+          );
+        }
       }
     }
   }

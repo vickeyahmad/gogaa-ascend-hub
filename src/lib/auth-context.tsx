@@ -20,6 +20,7 @@ export interface AuthContextType {
   user: AdminUserDto | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isLoggingOut: boolean;
   error: string | null;
   login: (email: string, password: string, rememberMe?: boolean) => Promise<AdminUserDto>;
   logout: () => Promise<void>;
@@ -31,6 +32,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AdminUserDto | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -39,6 +41,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Customer cookies or unauthenticated requests are rejected by the server.
    */
   const refreshSession = useCallback(async (): Promise<AdminUserDto | null> => {
+    if (isLoggingOut) {
+      return null;
+    }
     try {
       const response = await apiRequest<AdminUserDto>('/api/admin/auth/me', {
         method: 'GET',
@@ -63,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [isLoggingOut]);
 
   useEffect(() => {
     // Check active server session on initial mount
@@ -91,6 +96,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           throw new ApiClientError(loginResponse.message || 'Login failed.');
         }
 
+        // CRITICAL CSRF LIFECYCLE FIX:
+        // Login established an authenticated session cookie (.WebAPI.Admin.Auth),
+        // which alters the user's ClaimsPrincipal identity in ASP.NET Core.
+        // The old anonymous antiforgery token is invalid for authenticated requests.
+        // Invalidate the cached anonymous token and immediately obtain a fresh
+        // token issued for the newly authenticated administrator identity.
+        clearCsrfToken();
+        await getCsrfToken(true).catch(() => '');
+
         // Verify with GET /api/admin/auth/me to ensure session cookie is active
         const verifiedUser = await refreshSession();
         if (!verifiedUser) {
@@ -117,33 +131,77 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /**
    * Logs out the administrator by calling POST /api/admin/auth/logout.
    * Sends the required X-XSRF-TOKEN header and credentials: 'include'.
-   * Invalidates the server session cookie and clears in-memory state.
+   * Shows the branded loader immediately, invalidates server session,
+   * verifies invalidation via /me, and clears in-memory state.
    */
   const logout = useCallback(async (): Promise<void> => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    setError(null);
+
     try {
+      // 1. Post to backend logout endpoint
       await apiRequest('/api/admin/auth/logout', {
         method: 'POST',
       });
-    } catch (_err) {
-      // If server is unreachable, still clear frontend session
-    } finally {
+
+      // 2. Clear CSRF token cache
       clearCsrfToken();
+
+      // 3. Verify server session invalidation via GET /api/admin/auth/me
+      let stillAuthenticated = false;
+      try {
+        const verify = await apiRequest<AdminUserDto>('/api/admin/auth/me', {
+          method: 'GET',
+          skipCsrf: true,
+        });
+        if (verify.success && verify.data) {
+          stillAuthenticated = true;
+        }
+      } catch {
+        // Expected 401 Unauthorized: confirms session is destroyed on the server
+        stillAuthenticated = false;
+      }
+
+      if (stillAuthenticated) {
+        throw new ApiClientError(
+          'Server session could not be invalidated. Please try signing out again.',
+          500,
+        );
+      }
+
+      // 4. Clear in-memory administrator state
       setUser(null);
       setIsLoading(false);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Failed to sign out from administrator session. Please try again.';
+      setError(message);
+      throw err;
+    } finally {
+      setIsLoggingOut(false);
     }
-  }, []);
+  }, [isLoggingOut]);
 
   const value: AuthContextType = {
     user,
     isAuthenticated: !!user,
     isLoading,
+    isLoggingOut,
     error,
     login,
     logout,
     refreshSession,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {isLoggingOut && <FullScreenLoader message="Signing out of Control Center..." />}
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextType {
@@ -161,14 +219,29 @@ export function useAuth(): AuthContextType {
  * Only displays protected children when the server has authorized the administrator session.
  */
 export function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, isLoggingOut, refreshSession } = useAuth();
   const navigate = useNavigate();
 
+  // Listen for browser Back/Forward (bfcache) navigation
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        void refreshSession();
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, [refreshSession]);
+
+  useEffect(() => {
+    if (!isLoading && !isLoggingOut && !isAuthenticated) {
       void navigate({ to: '/login' });
     }
-  }, [isLoading, isAuthenticated, navigate]);
+  }, [isLoading, isLoggingOut, isAuthenticated, navigate]);
+
+  if (isLoggingOut) {
+    return <FullScreenLoader message="Signing out of Control Center..." />;
+  }
 
   if (isLoading || !isAuthenticated) {
     return <FullScreenLoader />;
