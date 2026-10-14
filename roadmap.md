@@ -1,6 +1,6 @@
 # Phase 1
-- [ ] Centralize brand tokens and preserve GB logo.
-- [ ] Dashboard shell with sample metrics, orders, attention, and preview navigation.
-- [ ] Frontend-only login preview.
-- [ ] Branded loader and reusable loading states.
-- [ ] Verify interactions, mobile layout, and existing tests.
+- [x] Centralize brand tokens and preserve GB logo.
+- [x] Dashboard shell with sample metrics, orders, attention, and preview navigation.
+- [x] Frontend-only login preview.
+- [x] Branded loader and reusable loading states.
+- [x] Verify interactions, mobile layout, and existing tests.
