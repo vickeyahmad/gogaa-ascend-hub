@@ -77,3 +77,4 @@
 .login-error{padding:10px 12px;border-radius:8px;background:color-mix(in oklch,var(--danger) 7%,var(--card));border:1px solid color-mix(in oklch,var(--danger) 25%,transparent)}
 @media (max-width:767px){.gradient-hero{min-height:0}.hero-copy{max-width:100%}.metric-card{min-height:0}.nav-item:hover:not(.active){padding-left:12px}}
 @media (prefers-reduced-motion:reduce){.energy-core:before,.energy-ring,.full-screen-loader .loader-wordmark,.full-screen-loader .energy-glass img,.energy-loader.complete .energy-ring{animation:none!important}}
+th{font-size:10px!important}td,.customer-name,.amount-cell,.order-id{font-size:12px!important}.customer-email,.date-cell{font-size:11px!important}.status-badge{font-size:10px!important;padding:4px 9px!important}.quick-label{font-size:12px!important}.quick-subtitle{font-size:10px!important}.hero-copy{padding-block:18px}
