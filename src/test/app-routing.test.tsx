@@ -7,7 +7,7 @@ import { routeTree } from "@/routeTree.gen";
 // Match routes without running loaders or rendering: loaders may need a server or
 // network the test run lacks, and jsdom never loads the stylesheets React waits on.
 describe("App routing", () => {
-  it.each(["/login", "/loading", "/categories", "/products"])("matches the route at %s", (path) => {
+  it.each(["/login", "/loading", "/categories", "/products", "/vendors"])("matches the route at %s", (path) => {
     const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
     expect(router.matchRoutes(path).at(-1)?.routeId).not.toBe(rootRouteId);
   });
@@ -34,6 +34,15 @@ describe("App routing", () => {
     const matches = router.matchRoutes("/product");
 
     // /product is unmatched, so it falls back to the root route's notFoundComponent
+    expect(matches.at(-1)?.routeId).toBe(rootRouteId);
+  });
+
+  it("does not match singular /vendor route and falls back to root not-found", () => {
+    const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
+
+    const matches = router.matchRoutes("/vendor");
+
+    // /vendor is unmatched, so it falls back to the root route's notFoundComponent
     expect(matches.at(-1)?.routeId).toBe(rootRouteId);
   });
 
