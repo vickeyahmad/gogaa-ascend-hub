@@ -73,7 +73,7 @@ export interface AppShellProps {
   children: ReactNode;
   search?: string;
   onSearch?: (value: string) => void;
-  activeItem?: 'Dashboard' | 'Categories' | string;
+  activeItem?: 'Dashboard' | 'Categories' | 'Products' | string;
   pageTitle?: string;
   breadcrumbs?: { label: string; href?: string }[];
   searchPlaceholder?: string;
@@ -148,13 +148,19 @@ export function AppShell({
                   key={item.name}
                   className={item.name === activeItem ? 'active' : ''}
                   aria-current={item.name === activeItem ? 'page' : undefined}
-                  title={item.name === 'Dashboard' || item.name === 'Categories' ? item.name : `${item.name} — preview`}
+                  title={
+                    item.name === 'Dashboard' || item.name === 'Categories' || item.name === 'Products'
+                      ? item.name
+                      : `${item.name} — preview`
+                  }
                   onClick={() => {
                     setMobile(false);
                     if (item.name === 'Dashboard') {
                       void navigate({ to: '/' });
                     } else if (item.name === 'Categories') {
                       void navigate({ to: '/categories' });
+                    } else if (item.name === 'Products') {
+                      void navigate({ to: '/products' });
                     } else {
                       setDialog(`${item.name} · Coming in a future phase`);
                     }
