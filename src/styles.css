@@ -96,15 +96,15 @@ th{font-size:10px!important}td,.customer-name,.amount-cell,.order-id{font-size:1
 .field-error-text{font-size:11px;color:var(--danger);margin-top:5px;display:flex;align-items:center;gap:4px}
 .field-help-text{font-size:10px;color:var(--muted-foreground);margin-top:4px}
 
-.category-cards-grid, .product-cards-grid, .vendor-cards-grid{display:none}
+.category-cards-grid, .product-cards-grid, .vendor-cards-grid, .order-cards-grid{display:none}
 @media(max-width:767px){
-  .category-table-desktop, .product-table-desktop, .vendor-table-desktop{display:none}
-  .category-cards-grid, .product-cards-grid, .vendor-cards-grid{display:grid;gap:12px;padding:12px}
-  .category-card, .product-card, .vendor-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
-  .category-card-header, .product-card-header, .vendor-card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
-  .category-card-title, .product-card-title, .vendor-card-title{font-size:14px;font-weight:700}
-  .category-card-desc, .product-card-desc, .vendor-card-desc{font-size:11px;color:var(--muted-foreground);line-height:1.5}
-  .category-card-meta, .product-card-meta, .vendor-card-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-  .category-card-actions, .product-card-actions, .vendor-card-actions{display:flex;gap:8px;padding-top:10px;border-top:1px solid var(--border)}
+  .category-table-desktop, .product-table-desktop, .vendor-table-desktop, .order-table-desktop{display:none}
+  .category-cards-grid, .product-cards-grid, .vendor-cards-grid, .order-cards-grid{display:grid;gap:12px;padding:12px}
+  .category-card, .product-card, .vendor-card, .order-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+  .category-card-header, .product-card-header, .vendor-card-header, .order-card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+  .category-card-title, .product-card-title, .vendor-card-title, .order-card-title{font-size:14px;font-weight:700}
+  .category-card-desc, .product-card-desc, .vendor-card-desc, .order-card-desc{font-size:11px;color:var(--muted-foreground);line-height:1.5}
+  .category-card-meta, .product-card-meta, .vendor-card-meta, .order-card-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .category-card-actions, .product-card-actions, .vendor-card-actions, .order-card-actions{display:flex;gap:8px;padding-top:10px;border-top:1px solid var(--border)}
 }
 

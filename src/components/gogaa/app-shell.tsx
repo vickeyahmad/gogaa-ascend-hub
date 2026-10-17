@@ -73,7 +73,7 @@ export interface AppShellProps {
   children: ReactNode;
   search?: string;
   onSearch?: (value: string) => void;
-  activeItem?: 'Dashboard' | 'Categories' | 'Products' | 'Vendors' | 'Product Mappings' | string;
+  activeItem?: 'Dashboard' | 'Categories' | 'Products' | 'Vendors' | 'Product Mappings' | 'Orders' | string;
   pageTitle?: string;
   breadcrumbs?: { label: string; href?: string }[];
   searchPlaceholder?: string;
@@ -153,7 +153,8 @@ export function AppShell({
                     item.name === 'Categories' ||
                     item.name === 'Products' ||
                     item.name === 'Vendors' ||
-                    item.name === 'Product Mappings'
+                    item.name === 'Product Mappings' ||
+                    item.name === 'Orders'
                       ? item.name
                       : `${item.name} — preview`
                   }
@@ -169,6 +170,8 @@ export function AppShell({
                       void navigate({ to: '/vendors' });
                     } else if (item.name === 'Product Mappings') {
                       void navigate({ to: '/vendor-products' });
+                    } else if (item.name === 'Orders') {
+                      void navigate({ to: '/orders' });
                     } else {
                       setDialog(`${item.name} · Coming in a future phase`);
                     }
