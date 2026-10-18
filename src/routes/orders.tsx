@@ -1,19 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
-import { RefreshCw, ShoppingCart, ShieldCheck } from 'lucide-react';
+import { RefreshCw, ShoppingCart, ShieldCheck, CheckCircle2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
 import { AppShell } from '@/components/gogaa/app-shell';
 import { AdminPageHeader } from '@/components/admin/admin-page-header';
 import { OrderTable } from '@/components/admin/order-table';
 import { OrderDetailDialog } from '@/components/admin/order-detail-dialog';
+import { StartProcessingDialog } from '@/components/admin/start-processing-dialog';
 import {
   getAdminOrders,
+  startOrderProcessing,
   type AdminOrderSummaryDto,
+  type AdminOrderDetailDto,
   type AdminOrderQuery,
   type OrderStatus,
   type SalesChannel,
 } from '@/lib/orders-api';
+import { ApiClientError } from '@/lib/api-client';
 
 export const Route = createFileRoute('/orders')({
   head: () => ({
@@ -27,7 +31,7 @@ export const Route = createFileRoute('/orders')({
       { property: 'og:title', content: 'Orders Management · Gogaa Byte Admin' },
       {
         property: 'og:description',
-        content: 'Read-only administrative order inspection in Gogaa Byte Control Center.',
+        content: 'Controlled administrative order inspection and processing in Gogaa Byte Control Center.',
       },
     ],
   }),
@@ -68,6 +72,17 @@ export function OrdersManagementView() {
   // Order Detail dialog state
   const [selectedOrderNumber, setSelectedOrderNumber] = useState<string | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState<boolean>(false);
+
+  // Start Processing dialog state
+  const [processingTargetOrder, setProcessingTargetOrder] = useState<
+    AdminOrderSummaryDto | AdminOrderDetailDto | null
+  >(null);
+  const [isProcessingDialogOpen, setIsProcessingDialogOpen] = useState<boolean>(false);
+  const [isProcessingSubmitting, setIsProcessingSubmitting] = useState<boolean>(false);
+  const [processingError, setProcessingError] = useState<string | null>(null);
+  const [processingAmbiguousFailure, setProcessingAmbiguousFailure] = useState<boolean>(false);
+  const [processingOrderNumbers, setProcessingOrderNumbers] = useState<string[]>([]);
+  const [successFeedback, setSuccessFeedback] = useState<string | null>(null);
 
   /**
    * Fetches customer orders with server-side filters and pagination.
@@ -196,6 +211,89 @@ export function OrdersManagementView() {
     setSelectedOrderNumber(null);
   };
 
+  const handleOpenStartProcessing = (
+    order: AdminOrderSummaryDto | AdminOrderDetailDto
+  ) => {
+    setProcessingTargetOrder(order);
+    setProcessingError(null);
+    setProcessingAmbiguousFailure(false);
+    setIsProcessingDialogOpen(true);
+  };
+
+  const handleCloseStartProcessing = () => {
+    if (!isProcessingSubmitting) {
+      setIsProcessingDialogOpen(false);
+      setProcessingTargetOrder(null);
+      setProcessingError(null);
+      setProcessingAmbiguousFailure(false);
+    }
+  };
+
+  const handleConfirmStartProcessing = async (reason?: string) => {
+    if (!processingTargetOrder || isProcessingSubmitting) return;
+
+    const targetOrderNumber = processingTargetOrder.orderNumber;
+    setIsProcessingSubmitting(true);
+    setProcessingError(null);
+    setProcessingAmbiguousFailure(false);
+    setProcessingOrderNumbers((prev) =>
+      prev.includes(targetOrderNumber) ? prev : [...prev, targetOrderNumber]
+    );
+
+    try {
+      const updatedOrder = await startOrderProcessing(targetOrderNumber, { reason });
+
+      // Synchronize in-memory order summary status strictly from the confirmed backend response
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.orderNumber === targetOrderNumber
+            ? { ...o, status: updatedOrder.status as OrderStatus }
+            : o
+        )
+      );
+
+      setSuccessFeedback(
+        `Order ${targetOrderNumber} has been transitioned to Processing successfully.`
+      );
+      setIsProcessingDialogOpen(false);
+      setProcessingTargetOrder(null);
+
+      // If details dialog is open for this order, close it so it reloads fresh on next open
+      if (selectedOrderNumber === targetOrderNumber) {
+        setIsDetailOpen(false);
+        setSelectedOrderNumber(null);
+      }
+
+      // Authoritative refresh of current page from server
+      await fetchOrders(true, page);
+    } catch (err: unknown) {
+      const isNetworkError =
+        (err instanceof ApiClientError && err.status === 0) ||
+        (err instanceof TypeError &&
+          err.message.toLowerCase().includes('failed to fetch')) ||
+        (typeof navigator !== 'undefined' && !navigator.onLine);
+
+      if (isNetworkError) {
+        setProcessingAmbiguousFailure(true);
+        setProcessingError(
+          'Network connection interrupted during order processing request. The backend may or may not have committed the transition. Do not re-send. Please inspect or refresh order status.'
+        );
+      } else {
+        setProcessingAmbiguousFailure(false);
+        setProcessingError(
+          err instanceof Error
+            ? err.message
+            : 'An unexpected error occurred while starting order processing.'
+        );
+      }
+    } finally {
+      setIsProcessingSubmitting(false);
+      setProcessingOrderNumbers((prev) =>
+        prev.filter((num) => num !== targetOrderNumber)
+      );
+    }
+  };
+
   return (
     <AppShell activeItem="Orders" pageTitle="Orders Management">
       <div className="page-container space-y-6">
@@ -227,12 +325,35 @@ export function OrdersManagementView() {
           }
         />
 
-        {/* Read-only Security Notice Banner */}
+        {/* Success Feedback Alert */}
+        {successFeedback && (
+          <div
+            className="p-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-3 text-sm shadow-sm animate-in fade-in"
+            role="status"
+            data-testid="order-processing-success-banner"
+          >
+            <div className="flex items-center gap-2.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="font-medium">{successFeedback}</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSuccessFeedback(null)}
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+              aria-label="Dismiss success notice"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        )}
+
+        {/* Security Notice Banner */}
         <div className="p-3.5 rounded-lg border border-border bg-card/60 flex items-center justify-between gap-3 text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
             <span>
-              Orders and historical payment records are displayed in read-only administrative mode. All product prices reflect locked creation snapshots.
+              Orders and historical payment records reflect locked creation snapshots. Only verified Paid orders can be transitioned to Processing.
             </span>
           </div>
           <span className="font-mono text-[11px] text-muted-foreground shrink-0">
@@ -247,6 +368,8 @@ export function OrdersManagementView() {
           error={error}
           onRetry={() => void fetchOrders(false, page)}
           onViewDetail={handleOpenDetail}
+          onStartProcessing={handleOpenStartProcessing}
+          processingOrderNumbers={processingOrderNumbers}
           selectedStatus={selectedStatus}
           onStatusChange={handleStatusChange}
           selectedSalesChannel={selectedSalesChannel}
@@ -272,6 +395,28 @@ export function OrdersManagementView() {
           orderNumber={selectedOrderNumber}
           isOpen={isDetailOpen}
           onClose={handleCloseDetail}
+          onStartProcessing={handleOpenStartProcessing}
+          isProcessingInFlight={
+            selectedOrderNumber
+              ? processingOrderNumbers.includes(selectedOrderNumber)
+              : false
+          }
+        />
+
+        {/* Start Order Processing Confirmation Modal */}
+        <StartProcessingDialog
+          isOpen={isProcessingDialogOpen}
+          orderNumber={processingTargetOrder?.orderNumber ?? null}
+          orderTotal={processingTargetOrder?.totalAmount ?? 0}
+          currency={processingTargetOrder?.currency ?? 'PKR'}
+          customerName={processingTargetOrder?.customerName ?? null}
+          customerEmail={processingTargetOrder?.customerEmail ?? null}
+          currentStatus={processingTargetOrder?.status ?? 'Paid'}
+          isSubmitting={isProcessingSubmitting}
+          error={processingError}
+          isAmbiguousFailure={processingAmbiguousFailure}
+          onConfirm={handleConfirmStartProcessing}
+          onClose={handleCloseStartProcessing}
         />
       </div>
     </AppShell>

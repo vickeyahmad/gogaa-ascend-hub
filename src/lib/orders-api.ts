@@ -205,6 +205,63 @@ export async function getAdminOrderDetail(orderNumber: string): Promise<AdminOrd
   return response.data;
 }
 
+export interface AdminStartOrderProcessingRequest {
+  reason?: string;
+}
+
+/**
+ * Validates the administrative processing reason.
+ * Optional context note, maximum 500 characters if provided.
+ */
+export function validateProcessingReason(reason?: string | null): string | null {
+  if (reason && reason.trim().length > 500) {
+    return 'Processing reason cannot exceed 500 characters.';
+  }
+  return null;
+}
+
+/**
+ * Explicit administrator operation to transition a verified Paid order into Processing status.
+ * Sends POST /api/admin/orders/{orderNumber}/start-processing with X-XSRF-TOKEN.
+ * Never automatically retried on ambiguous failures.
+ */
+export async function startOrderProcessing(
+  orderNumber: string,
+  request?: AdminStartOrderProcessingRequest
+): Promise<AdminOrderDetailDto> {
+  if (!orderNumber || !orderNumber.trim()) {
+    throw new ApiClientError('Order number is required.', 400);
+  }
+
+  const validationError = validateProcessingReason(request?.reason);
+  if (validationError) {
+    throw new ApiClientError(validationError, 400);
+  }
+
+  const payload: AdminStartOrderProcessingRequest = {};
+  if (request?.reason && request.reason.trim()) {
+    payload.reason = request.reason.trim();
+  }
+
+  const encoded = encodeURIComponent(orderNumber.trim());
+  const response = await apiRequest<AdminOrderDetailDto>(
+    `/api/admin/orders/${encoded}/start-processing`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!response.data) {
+    throw new ApiClientError(
+      response.message || `Order '${orderNumber}' processing could not be started.`,
+      response.success ? 200 : 400
+    );
+  }
+
+  return response.data;
+}
+
 /**
  * Formats a currency amount into a clean, human-readable display string.
  */

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, waitFor, fireEvent, screen } from '@testing-library/react';
+import { render, waitFor, fireEvent, screen, within } from '@testing-library/react';
 import React, { act } from 'react';
 import { AuthProvider, ProtectedRoute } from '../lib/auth-context';
 import { OrdersManagementView } from '../routes/orders';
@@ -154,8 +154,13 @@ const sampleDetail: AdminOrderDetailDto = {
 };
 
 function setupOrderFetch(
-  orders: AdminOrderSummaryDto[] = sampleOrders,
-  detail: AdminOrderDetailDto = sampleDetail
+  orders: AdminOrderSummaryDto[] = sampleOrders.map((o) => ({ ...o })),
+  detail: AdminOrderDetailDto = {
+    ...sampleDetail,
+    items: [...sampleDetail.items],
+    statusHistory: [...sampleDetail.statusHistory],
+    payments: [...sampleDetail.payments],
+  }
 ) {
   setInMemoryCsrfToken('test-csrf-token-xyz');
 
@@ -177,7 +182,74 @@ function setupOrderFetch(
       );
     }
 
-    // 2. GET /api/admin/orders/:orderNumber
+    // 2. POST /api/admin/orders/:orderNumber/start-processing
+    const processMatch = url.match(/\/api\/admin\/orders\/([^/]+)\/start-processing$/);
+    if (processMatch && method === 'POST') {
+      const orderNumber = decodeURIComponent(processMatch[1]);
+      let body: any = {};
+      try {
+        body = init?.body ? JSON.parse(init.body) : {};
+      } catch {}
+
+      const foundOrder = orders.find((o) => o.orderNumber === orderNumber);
+      if (!foundOrder) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: false,
+              message: `Order '${orderNumber}' was not found.`,
+              data: null,
+            }),
+            { status: 404, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (foundOrder.status !== 'Paid') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: false,
+              message: `Cannot start processing. Current status is '${foundOrder.status}'. Only 'Paid' orders can be processed.`,
+              data: null,
+            }),
+            { status: 400, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      foundOrder.status = 'Processing';
+
+      const updatedDetail: AdminOrderDetailDto = {
+        ...detail,
+        orderNumber,
+        status: 'Processing',
+        statusHistory: [
+          ...detail.statusHistory,
+          {
+            id: detail.statusHistory.length + 1,
+            previousStatus: 'Paid',
+            newStatus: 'Processing',
+            reason: body.reason || 'Administrator started order processing.',
+            changedByUserId: 'admin-001',
+            changedAt: new Date().toISOString(),
+          },
+        ],
+      };
+
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            message: `Order '${orderNumber}' transitioned to Processing successfully.`,
+            data: updatedDetail,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+    }
+
+    // 3. GET /api/admin/orders/:orderNumber
     const singleMatch = url.match(/\/api\/admin\/orders\/([^?]+)$/);
     if (singleMatch && method === 'GET') {
       const orderNumber = decodeURIComponent(singleMatch[1]);
@@ -853,7 +925,7 @@ describe('Orders Management View & Component Integration', () => {
     expect(screen.getByText('WLT-TX-99881')).toBeInTheDocument();
   });
 
-  it('guarantees that NO mutating order buttons exist in the interface', async () => {
+  it('guarantees that NO unauthorized order mutation buttons exist in the interface', async () => {
     setupOrderFetch();
 
     render(
@@ -878,14 +950,14 @@ describe('Orders Management View & Component Integration', () => {
       expect(screen.getByTestId('order-detail-dialog')).toBeInTheDocument();
     });
 
-    // STRICT VERIFICATION: None of the following mutating operations may exist as buttons
+    // STRICT VERIFICATION: None of the following unauthorized operations may exist as buttons
     expect(screen.queryByRole('button', { name: /mark paid/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /approve payment/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /start processing/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /refund/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /edit total/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /adjust wallet/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /fulfill/i })).not.toBeInTheDocument();
   });
 
   it('renders mobile cards with responsive layout and inspect details button', async () => {
@@ -904,5 +976,640 @@ describe('Orders Management View & Component Integration', () => {
     expect(screen.getByTestId('mobile-order-card-ORD-20261018-0001')).toBeInTheDocument();
     expect(screen.getByTestId('mobile-order-card-ORD-20261018-0002')).toBeInTheDocument();
     expect(screen.getByTestId('mobile-order-card-ORD-20261018-0003')).toBeInTheDocument();
+  });
+
+  /* =========================================================================
+   * MILESTONE 6B-4B: CONTROLLED ADMIN ORDER PROCESSING TESTS
+   * ========================================================================= */
+
+  it('displays Start Processing button ONLY for Paid orders in table and mobile cards', async () => {
+    setupOrderFetch();
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    // 1. Paid order ORD-20261018-0001 MUST have "Start Processing" button
+    expect(
+      screen.getByRole('button', { name: 'Start processing for ORD-20261018-0001' })
+    ).toBeInTheDocument();
+
+    // 2. PendingPayment order ORD-20261018-0002 MUST NOT have "Start Processing" button
+    expect(
+      screen.queryByRole('button', { name: 'Start processing for ORD-20261018-0002' })
+    ).not.toBeInTheDocument();
+
+    // 3. Already Processing order ORD-20261018-0003 MUST NOT have "Start Processing" button
+    expect(
+      screen.queryByRole('button', { name: 'Start processing for ORD-20261018-0003' })
+    ).not.toBeInTheDocument();
+
+    // 4. Mobile cards: check same status eligibility
+    const mobilePaidCard = screen.getByTestId('mobile-order-card-ORD-20261018-0001');
+    expect(mobilePaidCard.querySelector('button.bg-primary')).toHaveTextContent('Start Processing');
+
+    const mobilePendingCard = screen.getByTestId('mobile-order-card-ORD-20261018-0002');
+    expect(mobilePendingCard.querySelector('button.bg-primary')).toBeNull();
+
+    const mobileProcessingCard = screen.getByTestId('mobile-order-card-ORD-20261018-0003');
+    expect(mobileProcessingCard.querySelector('button.bg-primary')).toBeNull();
+  });
+
+  it('opens confirmation dialog when clicking Start Processing in table and displays accurate snapshot', async () => {
+    setupOrderFetch();
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    const startBtn = screen.getByRole('button', {
+      name: 'Start processing for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    // Verify dialog header and details
+    expect(screen.getByText('Start Order Processing')).toBeInTheDocument();
+    expect(screen.getByTestId('dialog-order-number')).toHaveTextContent('ORD-20261018-0001');
+    expect(screen.getByTestId('dialog-order-total')).toHaveTextContent('1,600.00 PKR');
+    expect(
+      within(screen.getByTestId('start-processing-dialog')).getByText('Alice Johnson')
+    ).toBeInTheDocument();
+
+    // Verify operational scope disclaimer
+    expect(screen.getByText(/What this action does:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Does NOT mark order delivered/i)).toBeInTheDocument();
+
+    // Test cancel dismisses dialog without mutating
+    const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
+    await act(async () => {
+      fireEvent.click(cancelBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('start-processing-dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('validates processing reason character count in confirmation dialog', async () => {
+    setupOrderFetch();
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    const startBtn = screen.getByRole('button', {
+      name: 'Start processing for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    const textarea = screen.getByTestId('processing-reason-input');
+    const counter = screen.getByTestId('character-counter');
+
+    expect(counter).toHaveTextContent('0 / 500');
+
+    // Valid text updates character count
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'Verified customer payment via JazzCash' } });
+    });
+    expect(counter).toHaveTextContent('38 / 500');
+    expect(screen.queryByText(/Processing reason cannot exceed 500 characters/i)).not.toBeInTheDocument();
+
+    // Text exceeding 500 characters shows error and disables confirm button
+    const overLimit = 'A'.repeat(501);
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: overLimit } });
+    });
+    expect(counter).toHaveTextContent('501 / 500');
+    expect(screen.getByText('Processing reason cannot exceed 500 characters.')).toBeInTheDocument();
+
+    const confirmBtn = screen.getByTestId('confirm-start-processing-btn');
+    expect(confirmBtn).toBeDisabled();
+  });
+
+  it('submits Start Processing request with CSRF token and optional reason, updates UI and shows feedback banner', async () => {
+    const fetchSpy = setupOrderFetch();
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    const startBtn = screen.getByRole('button', {
+      name: 'Start processing for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    const textarea = screen.getByTestId('processing-reason-input');
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'Verified payment and preparing delivery' } });
+    });
+
+    const confirmBtn = screen.getByTestId('confirm-start-processing-btn');
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    // Dialog closes
+    await waitFor(() => {
+      expect(screen.queryByTestId('start-processing-dialog')).not.toBeInTheDocument();
+    });
+
+    // Success feedback banner appears
+    await waitFor(() => {
+      expect(screen.getByTestId('order-processing-success-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('order-processing-success-banner')).toHaveTextContent(
+        'Order ORD-20261018-0001 has been transitioned to Processing successfully.'
+      );
+    });
+
+    // Start Processing button is no longer present for this order
+    expect(
+      screen.queryByRole('button', { name: 'Start processing for ORD-20261018-0001' })
+    ).not.toBeInTheDocument();
+
+    // Verify fetch call sent POST to start-processing
+    const postCall = fetchSpy.mock.calls.find((call) =>
+      call[0].includes('/api/admin/orders/ORD-20261018-0001/start-processing')
+    );
+    expect(postCall).toBeDefined();
+    expect(postCall?.[1]?.method).toBe('POST');
+    expect(JSON.parse(postCall?.[1]?.body)).toEqual({
+      reason: 'Verified payment and preparing delivery',
+    });
+
+    // Dismiss success banner
+    const dismissBtn = screen.getByRole('button', { name: 'Dismiss success notice' });
+    await act(async () => {
+      fireEvent.click(dismissBtn);
+    });
+    expect(screen.queryByTestId('order-processing-success-banner')).not.toBeInTheDocument();
+  });
+
+  it('allows starting processing from OrderDetailDialog footer for Paid orders', async () => {
+    setupOrderFetch();
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    // Open detail dialog
+    const detailsBtn = screen.getByRole('button', {
+      name: 'View details for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(detailsBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-detail-dialog')).toBeInTheDocument();
+    });
+
+    // Start Processing button should be visible in detail dialog footer for Paid order
+    const detailFooterProcessingBtn = screen.getByRole('button', {
+      name: 'Start Processing',
+    });
+    expect(detailFooterProcessingBtn).toBeInTheDocument();
+
+    // Click it to open confirmation dialog
+    await act(async () => {
+      fireEvent.click(detailFooterProcessingBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    // Confirm transition
+    const confirmBtn = screen.getByTestId('confirm-start-processing-btn');
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('start-processing-dialog')).not.toBeInTheDocument();
+    });
+
+    // Details dialog closes and success banner is displayed
+    await waitFor(() => {
+      expect(screen.getByTestId('order-processing-success-banner')).toBeInTheDocument();
+    });
+  });
+
+  it('prevents concurrent double clicks and disables buttons while submission is in flight', async () => {
+    setInMemoryCsrfToken('test-csrf-token-xyz');
+    let resolvePost: (value: any) => void;
+    const slowPostPromise = new Promise((resolve) => {
+      resolvePost = resolve;
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: any, init?: any) => {
+      const url = typeof input === 'string' ? input : input.url;
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (url.includes('/api/admin/auth/me')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ success: true, data: mockAdminUser }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/api/admin/orders') && method === 'GET') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                items: sampleOrders,
+                page: 1,
+                pageSize: 20,
+                totalCount: sampleOrders.length,
+                totalPages: 1,
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/start-processing') && method === 'POST') {
+        return slowPostPromise as Promise<Response>;
+      }
+
+      return Promise.resolve(new Response(JSON.stringify({ success: false }), { status: 404 }));
+    });
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    const startBtn = screen.getByRole('button', {
+      name: 'Start processing for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    const confirmBtn = screen.getByTestId('confirm-start-processing-btn');
+
+    // Click confirm to initiate in-flight request
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    // Both buttons should now be disabled to prevent double clicks
+    expect(confirmBtn).toBeDisabled();
+    expect(confirmBtn).toHaveTextContent('Starting Processing...');
+
+    // Resolve in-flight request
+    await act(async () => {
+      resolvePost!(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { ...sampleDetail, status: 'Processing' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('start-processing-dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('handles 409 Conflict when order is concurrently transitioned and displays clear error feedback', async () => {
+    setInMemoryCsrfToken('test-csrf-token-xyz');
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: any, init?: any) => {
+      const url = typeof input === 'string' ? input : input.url;
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (url.includes('/api/admin/auth/me')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ success: true, data: mockAdminUser }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/api/admin/orders') && method === 'GET') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                items: sampleOrders,
+                page: 1,
+                pageSize: 20,
+                totalCount: sampleOrders.length,
+                totalPages: 1,
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/start-processing') && method === 'POST') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: false,
+              message: "Order 'ORD-20261018-0001' is already in Processing status or was modified concurrently.",
+            }),
+            { status: 409, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      return Promise.resolve(new Response(JSON.stringify({ success: false }), { status: 404 }));
+    });
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    const startBtn = screen.getByRole('button', {
+      name: 'Start processing for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    const confirmBtn = screen.getByTestId('confirm-start-processing-btn');
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    // Dialog stays open and shows the conflict message
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-error-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('start-processing-error-banner')).toHaveTextContent(
+        "Order 'ORD-20261018-0001' is already in Processing status or was modified concurrently."
+      );
+    });
+
+    // Administrator can dismiss the dialog safely
+    const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
+    await act(async () => {
+      fireEvent.click(cancelBtn);
+    });
+    expect(screen.queryByTestId('start-processing-dialog')).not.toBeInTheDocument();
+  });
+
+  it('handles ambiguous network failure and displays clear warning alert instead of auto-retrying', async () => {
+    setInMemoryCsrfToken('test-csrf-token-xyz');
+    let postCallCount = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: any, init?: any) => {
+      const url = typeof input === 'string' ? input : input.url;
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (url.includes('/api/admin/auth/me')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ success: true, data: mockAdminUser }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/api/admin/orders') && method === 'GET') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                items: sampleOrders,
+                page: 1,
+                pageSize: 20,
+                totalCount: sampleOrders.length,
+                totalPages: 1,
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/start-processing') && method === 'POST') {
+        postCallCount++;
+        // Simulate immediate network disconnect / fetch failure
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+
+      return Promise.resolve(new Response(JSON.stringify({ success: false }), { status: 404 }));
+    });
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    const startBtn = screen.getByRole('button', {
+      name: 'Start processing for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    const confirmBtn = screen.getByTestId('confirm-start-processing-btn');
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    // Ambiguous network warning alert is displayed
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-ambiguous-alert')).toBeInTheDocument();
+      expect(screen.getByTestId('start-processing-ambiguous-alert')).toHaveTextContent(
+        /Network connection interrupted/i
+      );
+      expect(screen.getByTestId('start-processing-ambiguous-alert')).toHaveTextContent(
+        /Do not re-submit this action blindly/i
+      );
+    });
+
+    // Exactly one attempt was made — absolutely NO automatic blind retry
+    expect(postCallCount).toBe(1);
+  });
+
+  it('regression: failed POST (400 Bad Request) NEVER changes order status from Paid to Processing and does not show success banner', async () => {
+    setInMemoryCsrfToken('test-csrf-token-xyz');
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: any, init?: any) => {
+      const url = typeof input === 'string' ? input : input.url;
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (url.includes('/api/admin/auth/me')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ success: true, data: mockAdminUser }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/api/admin/orders') && method === 'GET') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                items: sampleOrders,
+                page: 1,
+                pageSize: 20,
+                totalCount: sampleOrders.length,
+                totalPages: 1,
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      if (url.includes('/start-processing') && method === 'POST') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: false,
+              message: 'Cannot start processing. Payment mismatch detected.',
+            }),
+            { status: 400, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
+      return Promise.resolve(new Response(JSON.stringify({ success: false }), { status: 404 }));
+    });
+
+    render(
+      <AuthProvider>
+        <OrdersManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('order-row-ORD-20261018-0001')).toBeInTheDocument();
+    });
+
+    const startBtn = screen.getByRole('button', {
+      name: 'Start processing for ORD-20261018-0001',
+    });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-dialog')).toBeInTheDocument();
+    });
+
+    const confirmBtn = screen.getByTestId('confirm-start-processing-btn');
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    // Dialog stays open with error message
+    await waitFor(() => {
+      expect(screen.getByTestId('start-processing-error-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('start-processing-error-banner')).toHaveTextContent(
+        'Cannot start processing. Payment mismatch detected.'
+      );
+    });
+
+    // CRITICAL: Success banner must NOT appear
+    expect(screen.queryByTestId('order-processing-success-banner')).not.toBeInTheDocument();
+
+    // Close the dialog
+    const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
+    await act(async () => {
+      fireEvent.click(cancelBtn);
+    });
+
+    // CRITICAL: Order status in the table MUST remain Paid, and "Start Processing" button MUST still be present
+    const orderRow = screen.getByTestId('order-row-ORD-20261018-0001');
+    expect(orderRow).toHaveTextContent('Paid');
+    expect(
+      screen.getByRole('button', { name: 'Start processing for ORD-20261018-0001' })
+    ).toBeInTheDocument();
   });
 });

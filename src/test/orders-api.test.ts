@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import {
   getAdminOrders,
   getAdminOrderDetail,
+  startOrderProcessing,
+  validateProcessingReason,
   formatOrderPrice,
   formatOrderDate,
   getOrderStatusBadgeInfo,
@@ -9,8 +11,9 @@ import {
   getSalesChannelBadgeInfo,
   type AdminOrderSummaryDto,
   type AdminOrderDetailDto,
+  type AdminStartOrderProcessingRequest,
 } from '../lib/orders-api';
-import { ApiClientError } from '../lib/api-client';
+import { ApiClientError, setInMemoryCsrfToken } from '../lib/api-client';
 
 const mockSummaryItem: AdminOrderSummaryDto = {
   orderNumber: 'ORD-20261018-0001',
@@ -276,6 +279,162 @@ describe('Orders API Client & Helpers', () => {
       await expect(getAdminOrderDetail('ORD-NONEXISTENT')).rejects.toThrow(
         "Order 'ORD-NONEXISTENT' was not found."
       );
+    });
+  });
+
+  describe('validateProcessingReason', () => {
+    it('allows undefined, null, empty string, or whitespace', () => {
+      expect(validateProcessingReason(undefined)).toBeNull();
+      expect(validateProcessingReason(null)).toBeNull();
+      expect(validateProcessingReason('')).toBeNull();
+      expect(validateProcessingReason('   ')).toBeNull();
+    });
+
+    it('allows valid note within 500 characters', () => {
+      expect(validateProcessingReason('Customer confirmed payment')).toBeNull();
+      const exactly500 = 'a'.repeat(500);
+      expect(validateProcessingReason(exactly500)).toBeNull();
+    });
+
+    it('rejects notes exceeding 500 characters', () => {
+      const tooLong = 'a'.repeat(501);
+      expect(validateProcessingReason(tooLong)).toBe(
+        'Processing reason cannot exceed 500 characters.'
+      );
+    });
+  });
+
+  describe('startOrderProcessing', () => {
+    it('throws ApiClientError if orderNumber is empty or whitespace', async () => {
+      await expect(startOrderProcessing('')).rejects.toThrow(
+        'Order number is required.'
+      );
+      await expect(startOrderProcessing('   ')).rejects.toThrow(
+        'Order number is required.'
+      );
+    });
+
+    it('throws ApiClientError if reason exceeds 500 characters', async () => {
+      await expect(
+        startOrderProcessing('ORD-20261018-0001', { reason: 'x'.repeat(501) })
+      ).rejects.toThrow('Processing reason cannot exceed 500 characters.');
+    });
+
+    it('properly encodes orderNumber and sends POST with CSRF and payload', async () => {
+      setInMemoryCsrfToken('mock-xsrf-token-orders');
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: true,
+            message: 'Order processing started.',
+            data: {
+              ...mockOrderDetail,
+              status: 'Processing',
+              statusHistory: [
+                ...mockOrderDetail.statusHistory,
+                {
+                  id: 3,
+                  previousStatus: 'Paid',
+                  newStatus: 'Processing',
+                  reason: 'Admin started processing',
+                  changedByUserId: 'admin-user-1',
+                  changedAt: '2026-10-18T10:10:00Z',
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+
+      const result = await startOrderProcessing('ORD/2026 0001', {
+        reason: 'Admin started processing',
+      });
+
+      expect(result.status).toBe('Processing');
+      expect(result.statusHistory).toHaveLength(3);
+      expect(fetchSpy).toHaveBeenCalled();
+      const call = fetchSpy.mock.calls[0];
+      expect(call[0]).toBe('/api/admin/orders/ORD%2F2026%200001/start-processing');
+      expect(call[1]?.method).toBe('POST');
+      expect(call[1]?.body).toBe(JSON.stringify({ reason: 'Admin started processing' }));
+      const headers = call[1]?.headers as Headers;
+      expect(headers.get('Content-Type')).toBe('application/json');
+      expect(headers.get('X-XSRF-TOKEN')).toBe('mock-xsrf-token-orders');
+    });
+
+    it('sends empty object in body when reason is not provided', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { ...mockOrderDetail, status: 'Processing' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+
+      await startOrderProcessing('ORD-20261018-0001');
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/admin/orders/ORD-20261018-0001/start-processing',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({}),
+        })
+      );
+    });
+
+    it('propagates 400 BadRequest when order is not in Paid status', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: "Cannot start processing. Current status is 'PendingPayment'. Only 'Paid' orders can be processed.",
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+
+      await expect(
+        startOrderProcessing('ORD-20261018-0001')
+      ).rejects.toThrow(
+        "Cannot start processing. Current status is 'PendingPayment'. Only 'Paid' orders can be processed."
+      );
+    });
+
+    it('propagates 409 Conflict when order is concurrently transitioned or already in processing', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: "Order 'ORD-20261018-0001' is already in Processing status or was modified concurrently.",
+          }),
+          { status: 409, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+
+      await expect(
+        startOrderProcessing('ORD-20261018-0001')
+      ).rejects.toThrow(
+        "Order 'ORD-20261018-0001' is already in Processing status or was modified concurrently."
+      );
+    });
+
+    it('propagates 404 NotFound when order does not exist', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: "Order 'NONEXISTENT' was not found.",
+          }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+
+      await expect(
+        startOrderProcessing('NONEXISTENT')
+      ).rejects.toThrow("Order 'NONEXISTENT' was not found.");
     });
   });
 

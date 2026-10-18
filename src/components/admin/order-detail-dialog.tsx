@@ -29,18 +29,23 @@ import {
   RefreshCw,
   ShieldCheck,
   Info,
+  PlayCircle,
 } from 'lucide-react';
 
 export interface OrderDetailDialogProps {
   orderNumber: string | null;
   isOpen: boolean;
   onClose: () => void;
+  onStartProcessing?: (detail: AdminOrderDetailDto) => void;
+  isProcessingInFlight?: boolean;
 }
 
 export function OrderDetailDialog({
   orderNumber,
   isOpen,
   onClose,
+  onStartProcessing,
+  isProcessingInFlight = false,
 }: OrderDetailDialogProps) {
   const [detail, setDetail] = useState<AdminOrderDetailDto | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -500,11 +505,31 @@ export function OrderDetailDialog({
         <div className="p-4 border-t border-border bg-muted/20 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>Read-only inspection · Order processing workflow reserved for Milestone 6B-4B</span>
+            <span>
+              {detail?.status === 'Paid'
+                ? 'Order verified paid · Ready for administrative processing'
+                : detail?.status === 'Processing'
+                ? 'Order currently in processing'
+                : 'Authorized administrative inspection'}
+            </span>
           </div>
-          <Button variant="outline" size="sm" onClick={onClose} className="px-5">
-            Close
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={onClose} className="px-5">
+              Close
+            </Button>
+            {onStartProcessing && detail?.status === 'Paid' && (
+              <Button
+                variant="default"
+                size="sm"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground font-medium flex items-center gap-1.5"
+                onClick={() => onStartProcessing(detail)}
+                disabled={isProcessingInFlight}
+              >
+                <PlayCircle className="w-4 h-4" />
+                <span>{isProcessingInFlight ? 'Processing...' : 'Start Processing'}</span>
+              </Button>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

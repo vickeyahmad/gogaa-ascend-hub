@@ -10,6 +10,7 @@ import {
   CreditCard,
   Calendar,
   Filter,
+  PlayCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SkeletonLoader } from '@/components/gogaa/loaders';
@@ -28,6 +29,8 @@ export interface OrderTableProps {
   error: string | null;
   onRetry: () => void;
   onViewDetail: (orderNumber: string) => void;
+  onStartProcessing?: (order: AdminOrderSummaryDto) => void;
+  processingOrderNumbers?: string[];
   selectedStatus: string;
   onStatusChange: (status: string) => void;
   selectedSalesChannel: string;
@@ -86,6 +89,8 @@ export function OrderTable({
   error,
   onRetry,
   onViewDetail,
+  onStartProcessing,
+  processingOrderNumbers = [],
   selectedStatus,
   onStatusChange,
   selectedSalesChannel,
@@ -430,17 +435,33 @@ export function OrderTable({
 
                     {/* Actions */}
                     <td className="py-3 px-4 text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onViewDetail(order.orderNumber)}
-                        className="gap-1.5 text-xs h-7 px-2.5"
-                        title={`View details for ${order.orderNumber}`}
-                        aria-label={`View details for ${order.orderNumber}`}
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        Details
-                      </Button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        {onStartProcessing && order.status === 'Paid' && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => onStartProcessing(order)}
+                            disabled={processingOrderNumbers.includes(order.orderNumber)}
+                            className="gap-1 text-xs h-7 px-2.5 bg-primary hover:bg-primary/90 text-primary-foreground font-medium"
+                            title={`Start processing for ${order.orderNumber}`}
+                            aria-label={`Start processing for ${order.orderNumber}`}
+                          >
+                            <PlayCircle className="w-3.5 h-3.5" />
+                            {processingOrderNumbers.includes(order.orderNumber) ? 'Processing...' : 'Start Processing'}
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onViewDetail(order.orderNumber)}
+                          className="gap-1.5 text-xs h-7 px-2.5"
+                          title={`View details for ${order.orderNumber}`}
+                          aria-label={`View details for ${order.orderNumber}`}
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Details
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -521,12 +542,24 @@ export function OrderTable({
                   )}
                 </div>
 
-                <div className="order-card-actions">
+                <div className="order-card-actions flex items-center gap-2">
+                  {onStartProcessing && order.status === 'Paid' && (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => onStartProcessing(order)}
+                      disabled={processingOrderNumbers.includes(order.orderNumber)}
+                      className="flex-1 gap-1.5 text-xs h-8 bg-primary hover:bg-primary/90 text-primary-foreground font-medium"
+                    >
+                      <PlayCircle className="w-3.5 h-3.5" />
+                      {processingOrderNumbers.includes(order.orderNumber) ? 'Processing...' : 'Start Processing'}
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => onViewDetail(order.orderNumber)}
-                    className="w-full gap-1.5 text-xs h-8"
+                    className={`${onStartProcessing && order.status === 'Paid' ? 'flex-1' : 'w-full'} gap-1.5 text-xs h-8`}
                   >
                     <Eye className="w-3.5 h-3.5" />
                     Inspect Details
