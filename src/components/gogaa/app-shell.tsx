@@ -63,7 +63,7 @@ const navigation = [
     label: 'Operations',
     items: [
       { name: 'Orders', icon: ShoppingCart },
-      { name: 'Payment Reviews', icon: CreditCard, count: '8' },
+      { name: 'Payment Reviews', icon: CreditCard },
       { name: 'Fulfillment', icon: Workflow },
     ],
   },
@@ -73,7 +73,7 @@ export interface AppShellProps {
   children: ReactNode;
   search?: string;
   onSearch?: (value: string) => void;
-  activeItem?: 'Dashboard' | 'Categories' | 'Products' | 'Vendors' | 'Product Mappings' | 'Orders' | string;
+  activeItem?: 'Dashboard' | 'Categories' | 'Products' | 'Vendors' | 'Product Mappings' | 'Orders' | 'Payment Reviews' | string;
   pageTitle?: string;
   breadcrumbs?: { label: string; href?: string }[];
   searchPlaceholder?: string;
@@ -154,7 +154,8 @@ export function AppShell({
                     item.name === 'Products' ||
                     item.name === 'Vendors' ||
                     item.name === 'Product Mappings' ||
-                    item.name === 'Orders'
+                    item.name === 'Orders' ||
+                    item.name === 'Payment Reviews'
                       ? item.name
                       : `${item.name} — preview`
                   }
@@ -172,6 +173,8 @@ export function AppShell({
                       void navigate({ to: '/vendor-products' });
                     } else if (item.name === 'Orders') {
                       void navigate({ to: '/orders' });
+                    } else if (item.name === 'Payment Reviews') {
+                      void navigate({ to: '/payment-reviews' });
                     } else {
                       setDialog(`${item.name} · Coming in a future phase`);
                     }
