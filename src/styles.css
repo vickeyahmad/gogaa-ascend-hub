@@ -81,8 +81,8 @@
 th{font-size:10px!important}td,.customer-name,.amount-cell,.order-id{font-size:12px!important}.customer-email,.date-cell{font-size:11px!important}.status-badge{font-size:10px!important;padding:4px 9px!important}.quick-label{font-size:12px!important}.quick-subtitle{font-size:10px!important}.hero-copy{padding-block:18px}
 
 /* ===== Category & Admin Catalog Management ===== */
-.admin-badge-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;background:color-mix(in oklch,var(--green) 12%,var(--card));color:var(--green);border:1px solid color-mix(in oklch,var(--green) 30%,transparent)}
-.admin-badge-live>span{width:6px;height:6px;border-radius:50%;background:var(--green);animation:live-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite}
+.admin-badge-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;background:color-mix(in oklch,var(--green) 12%,var(--card));color:var(--green);border:1px solid color-mix(in oklch,var(--green) 30%,transparent);white-space:nowrap;flex-shrink:0}
+.admin-badge-live>span:empty{width:6px;height:6px;border-radius:50%;background:var(--green);animation:live-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite}
 @keyframes live-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.4;transform:scale(0.85)}}
 
 .slug-chip{display:inline-flex;align-items:center;gap:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;padding:3px 8px;border-radius:6px;background:var(--accent);color:var(--primary);border:1px solid color-mix(in oklch,var(--primary) 15%,var(--border))}

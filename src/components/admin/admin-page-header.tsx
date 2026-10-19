@@ -18,7 +18,7 @@ export function AdminPageHeader({
   return (
     <div className={`page-heading ${className}`}>
       <div className="min-w-0">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <h1 className="tracking-tight">{title}</h1>
           {badge}
         </div>

@@ -8,6 +8,7 @@ import {
   Link2,
   ShoppingCart,
   CreditCard,
+  Wallet,
   Workflow,
   PanelLeftClose,
   PanelLeftOpen,
@@ -63,7 +64,9 @@ const navigation = [
     label: 'Operations',
     items: [
       { name: 'Orders', icon: ShoppingCart },
+      { name: 'Payments', icon: CreditCard },
       { name: 'Payment Reviews', icon: CreditCard },
+      { name: 'Wallets', icon: Wallet },
       { name: 'Fulfillment', icon: Workflow },
     ],
   },
@@ -73,7 +76,17 @@ export interface AppShellProps {
   children: ReactNode;
   search?: string;
   onSearch?: (value: string) => void;
-  activeItem?: 'Dashboard' | 'Categories' | 'Products' | 'Vendors' | 'Product Mappings' | 'Orders' | 'Payment Reviews' | string;
+  activeItem?:
+    | 'Dashboard'
+    | 'Categories'
+    | 'Products'
+    | 'Vendors'
+    | 'Product Mappings'
+    | 'Orders'
+    | 'Payments'
+    | 'Payment Reviews'
+    | 'Wallets'
+    | string;
   pageTitle?: string;
   breadcrumbs?: { label: string; href?: string }[];
   searchPlaceholder?: string;
@@ -155,7 +168,9 @@ export function AppShell({
                     item.name === 'Vendors' ||
                     item.name === 'Product Mappings' ||
                     item.name === 'Orders' ||
-                    item.name === 'Payment Reviews'
+                    item.name === 'Payments' ||
+                    item.name === 'Payment Reviews' ||
+                    item.name === 'Wallets'
                       ? item.name
                       : `${item.name} — preview`
                   }
@@ -173,8 +188,12 @@ export function AppShell({
                       void navigate({ to: '/vendor-products' });
                     } else if (item.name === 'Orders') {
                       void navigate({ to: '/orders' });
+                    } else if (item.name === 'Payments') {
+                      void navigate({ to: '/payments' });
                     } else if (item.name === 'Payment Reviews') {
                       void navigate({ to: '/payment-reviews' });
+                    } else if (item.name === 'Wallets') {
+                      void navigate({ to: '/wallets' });
                     } else {
                       setDialog(`${item.name} · Coming in a future phase`);
                     }
