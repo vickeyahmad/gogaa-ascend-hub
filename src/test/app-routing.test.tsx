@@ -18,6 +18,7 @@ describe("App routing", () => {
     "/payment-reviews",
     "/payments",
     "/wallets",
+    "/fulfillment",
   ])("matches the route at %s", (path) => {
     const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
     expect(router.matchRoutes(path).at(-1)?.routeId).not.toBe(rootRouteId);
@@ -99,6 +100,15 @@ describe("App routing", () => {
     const matches = router.matchRoutes("/wallet");
 
     // /wallet is unmatched, so it falls back to the root route's notFoundComponent
+    expect(matches.at(-1)?.routeId).toBe(rootRouteId);
+  });
+
+  it("does not match plural /fulfillments route and falls back to root not-found", () => {
+    const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
+
+    const matches = router.matchRoutes("/fulfillments");
+
+    // /fulfillments is unmatched, so it falls back to the root route's notFoundComponent
     expect(matches.at(-1)?.routeId).toBe(rootRouteId);
   });
 

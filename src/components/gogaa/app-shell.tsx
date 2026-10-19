@@ -86,6 +86,7 @@ export interface AppShellProps {
     | 'Payments'
     | 'Payment Reviews'
     | 'Wallets'
+    | 'Fulfillment'
     | string;
   pageTitle?: string;
   breadcrumbs?: { label: string; href?: string }[];
@@ -170,7 +171,8 @@ export function AppShell({
                     item.name === 'Orders' ||
                     item.name === 'Payments' ||
                     item.name === 'Payment Reviews' ||
-                    item.name === 'Wallets'
+                    item.name === 'Wallets' ||
+                    item.name === 'Fulfillment'
                       ? item.name
                       : `${item.name} — preview`
                   }
@@ -194,6 +196,8 @@ export function AppShell({
                       void navigate({ to: '/payment-reviews' });
                     } else if (item.name === 'Wallets') {
                       void navigate({ to: '/wallets' });
+                    } else if (item.name === 'Fulfillment') {
+                      void navigate({ to: '/fulfillment' });
                     } else {
                       setDialog(`${item.name} · Coming in a future phase`);
                     }
