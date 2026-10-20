@@ -7,6 +7,7 @@ import { AppShell } from '@/components/gogaa/app-shell';
 import { AdminPageHeader } from '@/components/admin/admin-page-header';
 import { FulfillmentTable } from '@/components/admin/fulfillment-table';
 import { FulfillmentDetailDialog } from '@/components/admin/fulfillment-detail-dialog';
+import { FulfillmentCapabilitiesBanner } from '@/components/admin/fulfillment-capabilities';
 import {
   getAdminFulfillments,
   type AdminFulfillmentSummaryDto,
@@ -65,6 +66,9 @@ export function FulfillmentManagementView() {
   // Detail dialog state
   const [selectedItem, setSelectedItem] = useState<AdminFulfillmentSummaryDto | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState<boolean>(false);
+
+  // Global capabilities refresh counter
+  const [capabilitiesRefreshTrigger, setCapabilitiesRefreshTrigger] = useState<number>(0);
 
   /**
    * Fetches fulfillment work queue with server-side filters and pagination.
@@ -230,15 +234,22 @@ export function FulfillmentManagementView() {
               variant="outline"
               size="sm"
               disabled={isLoading || isRefreshing}
-              onClick={() => void fetchFulfillments(true, page)}
+              onClick={() => {
+                setCapabilitiesRefreshTrigger((prev) => prev + 1);
+                void fetchFulfillments(true, page);
+              }}
               className="gap-2"
-              title="Refresh fulfillment queue"
+              title="Refresh fulfillment queue and capabilities"
               aria-label="Refresh fulfillment queue"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
               <span>Refresh</span>
             </Button>
           }
+        />
+
+        <FulfillmentCapabilitiesBanner
+          refreshTrigger={capabilitiesRefreshTrigger}
         />
 
         <FulfillmentTable

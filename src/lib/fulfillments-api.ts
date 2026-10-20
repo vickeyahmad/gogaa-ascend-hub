@@ -109,6 +109,15 @@ export interface AdminOrderFulfillmentsDto {
   fulfillments: AdminFulfillmentDto[];
 }
 
+export interface AdminFulfillmentCapabilitiesDto {
+  isGloballyEnabled: boolean;
+  hasProductAllowlistPolicy: boolean;
+  approvedProductCount: number;
+  isEffectivelyAvailable: boolean;
+  statusMessage: string;
+  isProductApproved?: boolean | null;
+}
+
 export interface PagedResult<T> {
   items: T[];
   page: number;
@@ -212,6 +221,35 @@ export async function getAdminOrderFulfillments(
     throw new ApiClientError(
       response.message || `Order '${orderNumber}' fulfillments not found.`,
       404
+    );
+  }
+
+  return response.data;
+}
+
+/**
+ * Retrieves operational capabilities and feature availability for administrative fulfillment workflows.
+ * Strictly read-only GET.
+ */
+export async function getAdminFulfillmentCapabilities(
+  productSku?: string
+): Promise<AdminFulfillmentCapabilitiesDto> {
+  let endpoint = '/api/admin/fulfillment-capabilities';
+  if (productSku && productSku.trim()) {
+    const params = new URLSearchParams();
+    params.set('productSku', productSku.trim());
+    endpoint = `${endpoint}?${params.toString()}`;
+  }
+
+  const response = await apiRequest<AdminFulfillmentCapabilitiesDto>(endpoint, {
+    method: 'GET',
+    skipCsrf: true,
+  });
+
+  if (!response.data) {
+    throw new ApiClientError(
+      response.message || 'Failed to retrieve fulfillment capabilities.',
+      500
     );
   }
 

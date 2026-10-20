@@ -3,6 +3,7 @@ import * as apiClient from '@/lib/api-client';
 import {
   getAdminFulfillments,
   getAdminOrderFulfillments,
+  getAdminFulfillmentCapabilities,
   getFulfillmentQueueStatusBadgeInfo,
   getParentOrderStatusBadgeInfo,
   getFulfillmentMethodBadgeInfo,
@@ -10,6 +11,7 @@ import {
   formatFulfillmentDate,
   type AdminFulfillmentSummaryDto,
   type AdminOrderFulfillmentsDto,
+  type AdminFulfillmentCapabilitiesDto,
   type PagedResult,
 } from '@/lib/fulfillments-api';
 
@@ -203,6 +205,99 @@ describe('fulfillments-api', () => {
       await expect(
         getAdminOrderFulfillments('ORD-NONEXISTENT')
       ).rejects.toThrow("Order 'ORD-NONEXISTENT' was not found.");
+    });
+  });
+
+  describe('getAdminFulfillmentCapabilities', () => {
+    it('calls /api/admin/fulfillment-capabilities with GET and skipCsrf when no SKU provided', async () => {
+      const mockCaps: AdminFulfillmentCapabilitiesDto = {
+        isGloballyEnabled: false,
+        hasProductAllowlistPolicy: false,
+        approvedProductCount: 0,
+        isEffectivelyAvailable: false,
+        statusMessage: 'Manual fulfillment is disabled by server configuration.',
+        isProductApproved: null,
+      };
+
+      const spy = vi.spyOn(apiClient, 'apiRequest').mockResolvedValue({
+        success: true,
+        data: mockCaps,
+        message: 'Fulfillment capabilities retrieved successfully.',
+      });
+
+      const res = await getAdminFulfillmentCapabilities();
+
+      expect(spy).toHaveBeenCalledWith('/api/admin/fulfillment-capabilities', {
+        method: 'GET',
+        skipCsrf: true,
+      });
+      expect(res.isGloballyEnabled).toBe(false);
+      expect(res.isEffectivelyAvailable).toBe(false);
+      expect(res.isProductApproved).toBeNull();
+    });
+
+    it('safely encodes productSku query parameter when provided', async () => {
+      const mockCaps: AdminFulfillmentCapabilitiesDto = {
+        isGloballyEnabled: true,
+        hasProductAllowlistPolicy: true,
+        approvedProductCount: 1,
+        isEffectivelyAvailable: true,
+        statusMessage: 'Manual fulfillment is active for 1 approved product(s).',
+        isProductApproved: true,
+      };
+
+      const spy = vi.spyOn(apiClient, 'apiRequest').mockResolvedValue({
+        success: true,
+        data: mockCaps,
+        message: 'Fulfillment capabilities retrieved successfully.',
+      });
+
+      const res = await getAdminFulfillmentCapabilities('VAL/VP 1000+TEST');
+
+      expect(spy).toHaveBeenCalledWith(
+        '/api/admin/fulfillment-capabilities?productSku=VAL%2FVP+1000%2BTEST',
+        {
+          method: 'GET',
+          skipCsrf: true,
+        }
+      );
+      expect(res.isGloballyEnabled).toBe(true);
+      expect(res.isProductApproved).toBe(true);
+    });
+
+    it('omits productSku query parameter when input is empty string or whitespace', async () => {
+      const mockCaps: AdminFulfillmentCapabilitiesDto = {
+        isGloballyEnabled: false,
+        hasProductAllowlistPolicy: false,
+        approvedProductCount: 0,
+        isEffectivelyAvailable: false,
+        statusMessage: 'Disabled',
+      };
+
+      const spy = vi.spyOn(apiClient, 'apiRequest').mockResolvedValue({
+        success: true,
+        data: mockCaps,
+        message: 'Success',
+      });
+
+      await getAdminFulfillmentCapabilities('   ');
+
+      expect(spy).toHaveBeenCalledWith('/api/admin/fulfillment-capabilities', {
+        method: 'GET',
+        skipCsrf: true,
+      });
+    });
+
+    it('throws ApiClientError when response data is null', async () => {
+      vi.spyOn(apiClient, 'apiRequest').mockResolvedValue({
+        success: false,
+        data: null,
+        message: 'Unauthorized access to capability status.',
+      });
+
+      await expect(getAdminFulfillmentCapabilities()).rejects.toThrow(
+        'Unauthorized access to capability status.'
+      );
     });
   });
 

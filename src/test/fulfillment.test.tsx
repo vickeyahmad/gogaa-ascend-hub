@@ -7,6 +7,7 @@ import { setInMemoryCsrfToken } from '../lib/api-client';
 import type {
   AdminFulfillmentSummaryDto,
   AdminOrderFulfillmentsDto,
+  AdminFulfillmentCapabilitiesDto,
 } from '../lib/fulfillments-api';
 
 // Mock TanStack Router
@@ -331,7 +332,10 @@ const sampleOrderFulfillmentsMap: Record<string, AdminOrderFulfillmentsDto> = {
 
 function setupFulfillmentFetch(
   fulfillments: AdminFulfillmentSummaryDto[] = sampleFulfillments.map((f) => ({ ...f })),
-  orderMap: Record<string, AdminOrderFulfillmentsDto> = { ...sampleOrderFulfillmentsMap }
+  orderMap: Record<string, AdminOrderFulfillmentsDto> = { ...sampleOrderFulfillmentsMap },
+  capabilitiesOverride?:
+    | Partial<AdminFulfillmentCapabilitiesDto>
+    | ((sku: string | null) => Partial<AdminFulfillmentCapabilitiesDto>)
 ) {
   setInMemoryCsrfToken('test-csrf-token-xyz');
 
@@ -346,6 +350,45 @@ function setupFulfillmentFetch(
             success: true,
             data: mockAdminUser,
             message: 'Authenticated',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+    }
+
+    // Operational Capabilities endpoint: /api/admin/fulfillment-capabilities
+    if (url.includes('/api/admin/fulfillment-capabilities')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const productSku = parsedUrl.searchParams.get('productSku');
+
+      const defaultCaps: AdminFulfillmentCapabilitiesDto = {
+        isGloballyEnabled: false,
+        hasProductAllowlistPolicy: false,
+        approvedProductCount: 0,
+        isEffectivelyAvailable: false,
+        statusMessage: 'Manual fulfillment is disabled by server configuration.',
+        isProductApproved: productSku ? false : null,
+      };
+
+      const resolved =
+        typeof capabilitiesOverride === 'function'
+          ? capabilitiesOverride(productSku)
+          : (capabilitiesOverride ?? {});
+
+      const finalCaps: AdminFulfillmentCapabilitiesDto = {
+        ...defaultCaps,
+        ...resolved,
+        ...(productSku !== null && resolved.isProductApproved !== undefined
+          ? { isProductApproved: resolved.isProductApproved }
+          : {}),
+      };
+
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: finalCaps,
+            message: 'Fulfillment capabilities retrieved successfully.',
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         )
@@ -748,6 +791,26 @@ describe('Fulfillment Work Queue View', () => {
         );
       }
 
+      if (url.includes('/api/admin/fulfillment-capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                isGloballyEnabled: false,
+                hasProductAllowlistPolicy: false,
+                approvedProductCount: 0,
+                isEffectivelyAvailable: false,
+                statusMessage: 'Manual fulfillment is disabled by server configuration.',
+                isProductApproved: null,
+              },
+              message: 'Fulfillment capabilities retrieved successfully.',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        );
+      }
+
       if (url.includes('/api/admin/fulfillments')) {
         if (shouldFail) {
           return Promise.resolve(
@@ -1000,6 +1063,75 @@ describe('Fulfillment Work Queue View', () => {
     await waitFor(() => {
       expect(screen.getByTestId('fulfillment-card-ORD-20261019-001-1')).toBeInTheDocument();
       expect(screen.getByTestId('fulfillment-card-ORD-20261019-003-3')).toBeInTheDocument();
+    });
+  });
+
+  it('renders global capabilities banner on the work queue page and re-fetches when header refresh is clicked', async () => {
+    const fetchSpy = setupFulfillmentFetch();
+
+    render(
+      <AuthProvider>
+        <FulfillmentManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('ORD-20261019-001')[0]).toBeInTheDocument();
+      expect(screen.getByTestId('fulfillment-capabilities-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('metric-global-switch')).toHaveTextContent('Disabled');
+      expect(screen.getByTestId('capability-effective-status')).toHaveTextContent('Manual Fulfillment Unavailable');
+    });
+
+    // Count calls to /api/admin/fulfillment-capabilities
+    const capabilityCallsBefore = fetchSpy.mock.calls.filter((c: any) =>
+      (typeof c[0] === 'string' ? c[0] : c[0].url).includes('/api/admin/fulfillment-capabilities')
+    ).length;
+    expect(capabilityCallsBefore).toBeGreaterThanOrEqual(1);
+
+    // Click header refresh button
+    const refreshBtn = screen.getByRole('button', { name: /Refresh fulfillment queue/i });
+    fireEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      const capabilityCallsAfter = fetchSpy.mock.calls.filter((c: any) =>
+        (typeof c[0] === 'string' ? c[0] : c[0].url).includes('/api/admin/fulfillment-capabilities')
+      ).length;
+      expect(capabilityCallsAfter).toBeGreaterThan(capabilityCallsBefore);
+    });
+  });
+
+  it('displays product capability status in FulfillmentDetailDialog for inspected order items', async () => {
+    setupFulfillmentFetch(
+      sampleFulfillments.map((f) => ({ ...f })),
+      { ...sampleOrderFulfillmentsMap },
+      (sku) => ({
+        isGloballyEnabled: true,
+        hasProductAllowlistPolicy: true,
+        approvedProductCount: 1,
+        isEffectivelyAvailable: true,
+        statusMessage: 'Manual fulfillment is active for 1 approved product(s).',
+        isProductApproved: sku === 'DISCORD-NITRO-1M',
+      })
+    );
+
+    render(
+      <AuthProvider>
+        <FulfillmentManagementView />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('ORD-20261019-003')[0]).toBeInTheDocument();
+    });
+
+    const row = screen.getByTestId('fulfillment-row-ORD-20261019-003-3');
+    const detailsBtn = row.querySelector('button[title*="Inspect details"]') as HTMLElement;
+    fireEvent.click(detailsBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('fulfillment-detail-dialog')).toBeInTheDocument();
+      expect(screen.getByTestId('product-capability-section')).toBeInTheDocument();
+      expect(screen.getByTestId('product-approval-badge')).toHaveTextContent('Product Approved for Pilot');
     });
   });
 });

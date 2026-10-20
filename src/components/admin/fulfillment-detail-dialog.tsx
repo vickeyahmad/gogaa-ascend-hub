@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { SkeletonLoader } from '@/components/gogaa/loaders';
+import { ProductFulfillmentCapability } from './fulfillment-capabilities';
 import {
   getAdminOrderFulfillments,
   getFulfillmentQueueStatusBadgeInfo,
@@ -297,6 +298,10 @@ export function FulfillmentDetailDialog({
                 </div>
               )}
 
+              {summaryItem && (
+                <ProductFulfillmentCapability productSku={summaryItem.productSku} />
+              )}
+
               <div className="p-4 rounded-lg border border-dashed border-border text-center text-xs text-muted-foreground space-y-1">
                 <p className="font-medium">No fulfillment attempts or status history recorded.</p>
                 <p>Attempts and audit transitions will appear once fulfillment is initiated.</p>
@@ -378,6 +383,9 @@ export function FulfillmentDetailDialog({
                         <span className="text-foreground">{formatFulfillmentDate(f.completedAt)}</span>
                       </div>
                     </div>
+
+                    {/* Product Capability Status */}
+                    <ProductFulfillmentCapability productSku={f.productSku} />
 
                     {/* Attempts History */}
                     <div className="space-y-2">
