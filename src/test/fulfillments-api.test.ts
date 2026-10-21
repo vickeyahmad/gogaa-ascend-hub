@@ -4,14 +4,23 @@ import {
   getAdminFulfillments,
   getAdminOrderFulfillments,
   getAdminFulfillmentCapabilities,
+  startManualFulfillment,
+  completeManualFulfillment,
+  validateDeliveryReference,
   getFulfillmentQueueStatusBadgeInfo,
   getParentOrderStatusBadgeInfo,
   getFulfillmentMethodBadgeInfo,
   getAttemptStatusBadgeInfo,
   formatFulfillmentDate,
+  isAmbiguousFulfillmentError,
+  markUnresolvedOperation,
+  getUnresolvedOperation,
+  clearUnresolvedOperation,
+  clearAllUnresolvedOperationsForTesting,
   type AdminFulfillmentSummaryDto,
   type AdminOrderFulfillmentsDto,
   type AdminFulfillmentCapabilitiesDto,
+  type AdminFulfillmentDto,
   type PagedResult,
 } from '@/lib/fulfillments-api';
 
@@ -301,6 +310,201 @@ describe('fulfillments-api', () => {
     });
   });
 
+  describe('validateDeliveryReference', () => {
+    it('rejects empty or whitespace reference', () => {
+      expect(validateDeliveryReference('').isValid).toBe(false);
+      expect(validateDeliveryReference('   ').isValid).toBe(false);
+      expect(validateDeliveryReference(null).isValid).toBe(false);
+    });
+
+    it('rejects references containing HTML markup < or >', () => {
+      expect(validateDeliveryReference('TICKET-<123>').isValid).toBe(false);
+    });
+
+    it('rejects ambiguous placeholders like N/A, TEST, 0000', () => {
+      expect(validateDeliveryReference('N/A').isValid).toBe(false);
+      expect(validateDeliveryReference('TEST').isValid).toBe(false);
+      expect(validateDeliveryReference('0000').isValid).toBe(false);
+    });
+
+    it('rejects references without approved prefixes', () => {
+      const res = validateDeliveryReference('EXTERNAL-12345');
+      expect(res.isValid).toBe(false);
+      expect(res.errorMessage).toContain('approved controlled prefix');
+    });
+
+    it('rejects references with invalid characters or spaces', () => {
+      expect(validateDeliveryReference('TICKET 12345').isValid).toBe(false);
+      expect(validateDeliveryReference('TICKET-12$45').isValid).toBe(false);
+    });
+
+    it('accepts valid structured references with approved prefixes', () => {
+      const res1 = validateDeliveryReference('TICKET-12345');
+      expect(res1.isValid).toBe(true);
+      expect(res1.normalized).toBe('TICKET-12345');
+
+      const res2 = validateDeliveryReference('DISPATCH-2026-10-21');
+      expect(res2.isValid).toBe(true);
+
+      const res3 = validateDeliveryReference('MSG-SUPPORT-99');
+      expect(res3.isValid).toBe(true);
+
+      const res4 = validateDeliveryReference('PORTAL-REQ-456');
+      expect(res4.isValid).toBe(true);
+
+      const res5 = validateDeliveryReference('REF-789012');
+      expect(res5.isValid).toBe(true);
+    });
+  });
+
+  describe('startManualFulfillment', () => {
+    it('validates orderNumber and orderItemId before sending request', async () => {
+      await expect(startManualFulfillment('', 1)).rejects.toThrow('Order number is required.');
+      await expect(startManualFulfillment('ORD-1', 0)).rejects.toThrow('A valid order item ID is required.');
+      await expect(startManualFulfillment('ORD-1', -5)).rejects.toThrow('A valid order item ID is required.');
+    });
+
+    it('sends POST to /api/admin/orders/:orderNumber/items/:orderItemId/manual-fulfillment/start', async () => {
+      const mockDto: AdminFulfillmentDto = {
+        fulfillmentId: 301,
+        orderId: 101,
+        orderItemId: 5,
+        productSku: 'VAL-VP-1000',
+        productName: '1000 Valorant Points',
+        unitPrice: 1000,
+        currency: 'PKR',
+        quantityRequested: 1,
+        quantityFulfilled: 0,
+        status: 'InProgress',
+        fulfillmentMethod: 'Manual',
+        createdAt: '2026-10-21T10:00:00Z',
+        updatedAt: '2026-10-21T10:00:00Z',
+        completedAt: null,
+        attempts: [],
+        statusHistory: [],
+      };
+
+      const spy = vi.spyOn(apiClient, 'apiRequest').mockResolvedValue({
+        success: true,
+        data: mockDto,
+        message: 'Manual fulfillment started successfully.',
+      });
+
+      const res = await startManualFulfillment('ORD-20261021-001', 5);
+
+      expect(spy).toHaveBeenCalledWith(
+        '/api/admin/orders/ORD-20261021-001/items/5/manual-fulfillment/start',
+        {
+          method: 'POST',
+        }
+      );
+      expect(res.fulfillmentId).toBe(301);
+      expect(res.status).toBe('InProgress');
+    });
+
+    it('propagates ApiClientError from apiRequest', async () => {
+      vi.spyOn(apiClient, 'apiRequest').mockRejectedValue(
+        new apiClient.ApiClientError('Product is not approved for manual fulfillment.', 403)
+      );
+
+      await expect(startManualFulfillment('ORD-1', 5)).rejects.toThrow(
+        'Product is not approved for manual fulfillment.'
+      );
+    });
+  });
+
+  describe('completeManualFulfillment', () => {
+    it('validates confirmDelivered is true before sending request', async () => {
+      await expect(
+        completeManualFulfillment('ORD-1', 5, {
+          confirmDelivered: false,
+          deliveryReference: 'TICKET-12345',
+          deliveryChannel: 'EmailSupport',
+        })
+      ).rejects.toThrow('ConfirmDelivered = true');
+    });
+
+    it('validates deliveryChannel belongs to approved channels', async () => {
+      await expect(
+        completeManualFulfillment('ORD-1', 5, {
+          confirmDelivered: true,
+          deliveryReference: 'TICKET-12345',
+          deliveryChannel: 'InvalidChannel',
+        })
+      ).rejects.toThrow('Invalid delivery channel');
+    });
+
+    it('validates deliveryReference format', async () => {
+      await expect(
+        completeManualFulfillment('ORD-1', 5, {
+          confirmDelivered: true,
+          deliveryReference: 'INVALID',
+          deliveryChannel: 'EmailSupport',
+        })
+      ).rejects.toThrow('approved controlled prefix');
+    });
+
+    it('rejects arbitrary operational notes', async () => {
+      await expect(
+        completeManualFulfillment('ORD-1', 5, {
+          confirmDelivered: true,
+          deliveryReference: 'TICKET-12345',
+          deliveryChannel: 'EmailSupport',
+          notes: 'Customer password was 123456',
+        })
+      ).rejects.toThrow('Arbitrary free-text notes are prohibited');
+    });
+
+    it('submits valid completion request and sends POST with normalized body', async () => {
+      const mockDto: AdminFulfillmentDto = {
+        fulfillmentId: 301,
+        orderId: 101,
+        orderItemId: 5,
+        productSku: 'VAL-VP-1000',
+        productName: '1000 Valorant Points',
+        unitPrice: 1000,
+        currency: 'PKR',
+        quantityRequested: 1,
+        quantityFulfilled: 1,
+        status: 'Completed',
+        fulfillmentMethod: 'Manual',
+        createdAt: '2026-10-21T10:00:00Z',
+        updatedAt: '2026-10-21T10:30:00Z',
+        completedAt: '2026-10-21T10:30:00Z',
+        attempts: [],
+        statusHistory: [],
+      };
+
+      const spy = vi.spyOn(apiClient, 'apiRequest').mockResolvedValue({
+        success: true,
+        data: mockDto,
+        message: 'Manual fulfillment completed successfully.',
+      });
+
+      const res = await completeManualFulfillment('ORD-20261021-001', 5, {
+        confirmDelivered: true,
+        deliveryReference: 'TICKET-12345',
+        deliveryChannel: 'EmailSupport',
+        notes: 'Standard delivery completed.',
+      });
+
+      expect(spy).toHaveBeenCalledWith(
+        '/api/admin/orders/ORD-20261021-001/items/5/manual-fulfillment/complete',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            confirmDelivered: true,
+            deliveryReference: 'TICKET-12345',
+            deliveryChannel: 'EmailSupport',
+            notes: 'Standard delivery completed.',
+          }),
+        }
+      );
+      expect(res.status).toBe('Completed');
+      expect(res.quantityFulfilled).toBe(1);
+    });
+  });
+
   describe('badge formatters', () => {
     it('returns appropriate badge info for queue status', () => {
       expect(getFulfillmentQueueStatusBadgeInfo('Uninitialized').label).toBe(
@@ -387,6 +591,119 @@ describe('fulfillments-api', () => {
       const formatted = formatFulfillmentDate('2026-10-19T10:30:00Z');
       expect(formatted).toContain('2026');
       expect(formatted).toContain('Oct');
+    });
+  });
+
+  describe('isAmbiguousFulfillmentError', () => {
+    it('classifies network disconnection (status 0) as ambiguous', () => {
+      const err = new apiClient.ApiClientError('Network failed', 0);
+      expect(isAmbiguousFulfillmentError(err)).toBe(true);
+    });
+
+    it('classifies HTTP 408 Request Timeout as ambiguous', () => {
+      const err = new apiClient.ApiClientError('Request Timeout', 408);
+      expect(isAmbiguousFulfillmentError(err)).toBe(true);
+    });
+
+    it('classifies HTTP 500 Internal Server Error as ambiguous', () => {
+      const err = new apiClient.ApiClientError('Internal Server Error', 500);
+      expect(isAmbiguousFulfillmentError(err)).toBe(true);
+    });
+
+    it('classifies HTTP 502 Bad Gateway as ambiguous', () => {
+      const err = new apiClient.ApiClientError('Bad Gateway', 502);
+      expect(isAmbiguousFulfillmentError(err)).toBe(true);
+    });
+
+    it('classifies HTTP 503 Service Unavailable as ambiguous', () => {
+      const err = new apiClient.ApiClientError('Service Unavailable', 503);
+      expect(isAmbiguousFulfillmentError(err)).toBe(true);
+    });
+
+    it('classifies HTTP 504 Gateway Timeout as ambiguous', () => {
+      const err = new apiClient.ApiClientError('Gateway Timeout', 504);
+      expect(isAmbiguousFulfillmentError(err)).toBe(true);
+    });
+
+    it('classifies other HTTP 5xx responses as ambiguous', () => {
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Variant Also Negotiates', 506))).toBe(true);
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Network Authentication Required', 511))).toBe(true);
+    });
+
+    it('classifies TypeError (fetch failure) as ambiguous', () => {
+      const err = new TypeError('Failed to fetch');
+      expect(isAmbiguousFulfillmentError(err)).toBe(true);
+    });
+
+    it('does NOT classify definite client rejections (400, 401, 403, 404, 409, 422) as ambiguous', () => {
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Bad Request', 400))).toBe(false);
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Unauthorized', 401))).toBe(false);
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Forbidden', 403))).toBe(false);
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Not Found', 404))).toBe(false);
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Conflict', 409))).toBe(false);
+      expect(isAmbiguousFulfillmentError(new apiClient.ApiClientError('Unprocessable', 422))).toBe(false);
+    });
+  });
+
+  describe('Unresolved Operations Marker Persistence', () => {
+    beforeEach(() => {
+      clearAllUnresolvedOperationsForTesting();
+    });
+
+    it('records and retrieves unresolved operations per order and item', () => {
+      markUnresolvedOperation({
+        orderNumber: 'ORD-TEST-001',
+        orderItemId: 1,
+        operationType: 'start',
+        recordedAt: '2026-10-21T10:00:00Z',
+        errorSummary: 'Timeout occurred during start.',
+      });
+
+      const op = getUnresolvedOperation('ORD-TEST-001', 1, 'start');
+      expect(op).not.toBeNull();
+      expect(op?.orderNumber).toBe('ORD-TEST-001');
+      expect(op?.orderItemId).toBe(1);
+      expect(op?.operationType).toBe('start');
+      expect(op?.errorSummary).toContain('Timeout');
+    });
+
+    it('isolates different items in the same order', () => {
+      markUnresolvedOperation({
+        orderNumber: 'ORD-TEST-001',
+        orderItemId: 1,
+        operationType: 'start',
+        recordedAt: '2026-10-21T10:00:00Z',
+        errorSummary: 'Timeout on item 1.',
+      });
+
+      expect(getUnresolvedOperation('ORD-TEST-001', 2, 'start')).toBeNull();
+      expect(getUnresolvedOperation('ORD-TEST-001', 1, 'start')).not.toBeNull();
+    });
+
+    it('isolates start operations from complete operations for the same item', () => {
+      markUnresolvedOperation({
+        orderNumber: 'ORD-TEST-001',
+        orderItemId: 1,
+        operationType: 'start',
+        recordedAt: '2026-10-21T10:00:00Z',
+        errorSummary: 'Timeout on start.',
+      });
+
+      expect(getUnresolvedOperation('ORD-TEST-001', 1, 'complete')).toBeNull();
+      expect(getUnresolvedOperation('ORD-TEST-001', 1, 'start')).not.toBeNull();
+    });
+
+    it('clears unresolved operation when explicitly resolved', () => {
+      markUnresolvedOperation({
+        orderNumber: 'ORD-TEST-001',
+        orderItemId: 1,
+        operationType: 'start',
+        recordedAt: '2026-10-21T10:00:00Z',
+        errorSummary: 'Timeout.',
+      });
+
+      clearUnresolvedOperation('ORD-TEST-001', 1, 'start');
+      expect(getUnresolvedOperation('ORD-TEST-001', 1, 'start')).toBeNull();
     });
   });
 });

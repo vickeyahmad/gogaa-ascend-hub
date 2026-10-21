@@ -354,6 +354,10 @@ export interface ProductFulfillmentCapabilityProps {
    */
   productSku?: string | null;
   className?: string;
+  /**
+   * Optional callback when product capability data is loaded from server.
+   */
+  onLoaded?: (data: AdminFulfillmentCapabilitiesDto) => void;
 }
 
 /**
@@ -365,6 +369,7 @@ export interface ProductFulfillmentCapabilityProps {
 export function ProductFulfillmentCapability({
   productSku,
   className = '',
+  onLoaded,
 }: ProductFulfillmentCapabilityProps) {
   const [capability, setCapability] =
     useState<AdminFulfillmentCapabilitiesDto | null>(null);
@@ -387,6 +392,7 @@ export function ProductFulfillmentCapability({
         }
 
         setCapability(data);
+        onLoaded?.(data);
       } catch (err: unknown) {
         if (currentFetchId !== latestFetchId.current) {
           return;
@@ -402,7 +408,7 @@ export function ProductFulfillmentCapability({
         }
       }
     },
-    []
+    [onLoaded]
   );
 
   useEffect(() => {

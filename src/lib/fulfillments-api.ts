@@ -109,6 +109,264 @@ export interface AdminOrderFulfillmentsDto {
   fulfillments: AdminFulfillmentDto[];
 }
 
+export interface AdminCompleteManualFulfillmentRequest {
+  confirmDelivered: boolean;
+  deliveryReference: string;
+  deliveryChannel: string;
+  notes?: string | null;
+}
+
+export const APPROVED_DELIVERY_CHANNELS = [
+  'EmailSupport',
+  'WhatsAppDirect',
+  'TelegramManual',
+  'InternalPortal',
+] as const;
+
+export type ApprovedDeliveryChannel = (typeof APPROVED_DELIVERY_CHANNELS)[number];
+
+export const APPROVED_REFERENCE_PREFIXES = [
+  'TICKET-',
+  'DISPATCH-',
+  'MSG-',
+  'PORTAL-',
+  'REF-',
+] as const;
+
+export const APPROVED_OPERATIONAL_NOTES = [
+  'Standard delivery completed.',
+  'Delivered via authorized customer channel.',
+  'Delivered via authorized customer care agent.',
+  'Customer confirmed receipt.',
+  'Account access transferred directly to customer.',
+  'Manual verification completed.',
+  'Replacement delivery issued.',
+  'Audit verification complete.',
+  'Standard authorized dispatch procedure completed.',
+] as const;
+
+export function validateDeliveryReference(reference: string | null | undefined): {
+  isValid: boolean;
+  errorMessage?: string;
+  normalized: string;
+} {
+  const trimmed = reference?.trim() ?? '';
+  if (!trimmed) {
+    return {
+      isValid: false,
+      errorMessage: 'A valid external delivery reference or support ticket identifier is required.',
+      normalized: '',
+    };
+  }
+
+  if (trimmed.includes('<') || trimmed.includes('>')) {
+    return {
+      isValid: false,
+      errorMessage: 'DeliveryReference contains invalid characters.',
+      normalized: '',
+    };
+  }
+
+  const ambiguous = [
+    'N/A', 'NA', 'NONE', 'NULL', '0000', '1111', '1234', 'TEST', 'DEMO', 'SAMPLE', 'DELIVERED', 'DONE', 'OK', 'COMPLETED',
+  ];
+  if (ambiguous.some((a) => a.toLowerCase() === trimmed.toLowerCase())) {
+    return {
+      isValid: false,
+      errorMessage: "Ambiguous placeholders (e.g. 'N/A', 'TEST', '0000', 'NONE') are not permitted as delivery references.",
+      normalized: '',
+    };
+  }
+
+  const hasPrefix = APPROVED_REFERENCE_PREFIXES.some((p) =>
+    trimmed.toUpperCase().startsWith(p.toUpperCase())
+  );
+  if (!hasPrefix) {
+    return {
+      isValid: false,
+      errorMessage: `DeliveryReference must begin with an approved controlled prefix (${APPROVED_REFERENCE_PREFIXES.join(', ')}).`,
+      normalized: '',
+    };
+  }
+
+  if (trimmed.length < 5 || trimmed.length > 100) {
+    return {
+      isValid: false,
+      errorMessage: 'A valid external delivery reference between 5 and 100 characters is required.',
+      normalized: '',
+    };
+  }
+
+  const formatRegex = /^[A-Za-z0-9][A-Za-z0-9_.:#-]{2,99}$/;
+  if (!formatRegex.test(trimmed)) {
+    return {
+      isValid: false,
+      errorMessage:
+        'DeliveryReference must be a structured identifier (alphanumeric characters, hyphens, colons, dots, or underscores without spaces).',
+      normalized: '',
+    };
+  }
+
+  return {
+    isValid: true,
+    normalized: trimmed,
+  };
+}
+
+/**
+ * Classifies whether an error encountered during a fulfillment mutation (Start or Complete)
+ * is ambiguous (i.e. uncertainty exists as to whether the backend received and processed the request).
+ *
+ * Ambiguous cases include:
+ * - Network drops, connection resets, client timeout, fetch failure, browser abort (status 0)
+ * - HTTP 408 Request Timeout
+ * - HTTP 500 Internal Server Error (server may have committed before crash or during response generation)
+ * - HTTP 502 Bad Gateway (reverse proxy or cloud gateway lost upstream connection)
+ * - HTTP 503 Service Unavailable (service overloaded, request may have reached worker)
+ * - HTTP 504 Gateway Timeout (upstream server timed out; transaction may have succeeded in DB)
+ * - Any other HTTP 5xx server errors
+ *
+ * Definite client rejections (status 400, 401, 403, 404, 409, 422) are non-ambiguous where the
+ * backend contract establishes that the mutation was rejected without modifying state.
+ */
+export function isAmbiguousFulfillmentError(err: unknown): boolean {
+  if (err instanceof ApiClientError) {
+    if (err.status === 0 || err.status === 408) {
+      return true;
+    }
+    if (err.status >= 500 && err.status < 600) {
+      return true;
+    }
+    return false;
+  }
+  if (err instanceof TypeError) {
+    // Standard browser fetch network failure / aborted request throws TypeError
+    return true;
+  }
+  if (
+    typeof DOMException !== 'undefined' &&
+    err instanceof DOMException &&
+    err.name === 'AbortError'
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export interface UnresolvedFulfillmentOperation {
+  orderNumber: string;
+  orderItemId: number;
+  operationType: 'start' | 'complete';
+  attemptNumber?: number;
+  recordedAt: string;
+  errorSummary: string;
+}
+
+const UNRESOLVED_OPS_STORAGE_KEY = 'gogaa_unresolved_manual_fulfillments';
+const inMemoryUnresolvedOps = new Map<string, UnresolvedFulfillmentOperation>();
+
+function buildOperationKey(
+  orderNumber: string,
+  orderItemId: number,
+  operationType: 'start' | 'complete'
+): string {
+  return `${orderNumber.trim().toUpperCase()}:${orderItemId}:${operationType}`;
+}
+
+function loadUnresolvedOpsFromSession(): void {
+  if (typeof window === 'undefined' || !window.sessionStorage) return;
+  try {
+    const raw = window.sessionStorage.getItem(UNRESOLVED_OPS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (item && item.orderNumber && item.orderItemId && item.operationType) {
+          const key = buildOperationKey(item.orderNumber, item.orderItemId, item.operationType);
+          inMemoryUnresolvedOps.set(key, item);
+        }
+      }
+    }
+  } catch {
+    // Session storage read failure or parse error; fallback to in-memory map
+  }
+}
+
+function saveUnresolvedOpsToSession(): void {
+  if (typeof window === 'undefined' || !window.sessionStorage) return;
+  try {
+    const array = Array.from(inMemoryUnresolvedOps.values());
+    window.sessionStorage.setItem(UNRESOLVED_OPS_STORAGE_KEY, JSON.stringify(array));
+  } catch {
+    // Session storage write failure (quota exceeded or disabled)
+  }
+}
+
+// Initialize on module load
+loadUnresolvedOpsFromSession();
+
+/**
+ * Persists an unresolved ambiguous fulfillment operation to prevent duplicate clicks across modal open/close
+ * and SPA route navigations within the session.
+ * Stores ZERO sensitive data (no tokens, passwords, customer emails, delivery credentials).
+ */
+export function markUnresolvedOperation(op: UnresolvedFulfillmentOperation): void {
+  const key = buildOperationKey(op.orderNumber, op.orderItemId, op.operationType);
+  inMemoryUnresolvedOps.set(key, op);
+  saveUnresolvedOpsToSession();
+}
+
+/**
+ * Retrieves a persistent unresolved operation marker for a specific order line item and operation type.
+ */
+export function getUnresolvedOperation(
+  orderNumber: string | null | undefined,
+  orderItemId: number | null | undefined,
+  operationType: 'start' | 'complete'
+): UnresolvedFulfillmentOperation | null {
+  if (!orderNumber || !orderItemId) return null;
+  loadUnresolvedOpsFromSession();
+  const key = buildOperationKey(orderNumber, orderItemId, operationType);
+  return inMemoryUnresolvedOps.get(key) || null;
+}
+
+/**
+ * Clears an unresolved operation marker ONLY when authoritative backend evidence demonstrates
+ * that the operation transitioned or was completed.
+ */
+export function clearUnresolvedOperation(
+  orderNumber: string | null | undefined,
+  orderItemId: number | null | undefined,
+  operationType: 'start' | 'complete'
+): void {
+  if (!orderNumber || !orderItemId) return;
+  const key = buildOperationKey(orderNumber, orderItemId, operationType);
+  inMemoryUnresolvedOps.delete(key);
+  saveUnresolvedOpsToSession();
+}
+
+/**
+ * Returns all currently recorded unresolved fulfillment operations.
+ */
+export function getAllUnresolvedOperations(): UnresolvedFulfillmentOperation[] {
+  loadUnresolvedOpsFromSession();
+  return Array.from(inMemoryUnresolvedOps.values());
+}
+
+/**
+ * Test helper to clear unresolved operation markers between test runs.
+ */
+export function clearAllUnresolvedOperationsForTesting(): void {
+  inMemoryUnresolvedOps.clear();
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      window.sessionStorage.removeItem(UNRESOLVED_OPS_STORAGE_KEY);
+    } catch {
+      // Ignore
+    }
+  }
+}
+
 export interface AdminFulfillmentCapabilitiesDto {
   isGloballyEnabled: boolean;
   hasProductAllowlistPolicy: boolean;
@@ -221,6 +479,121 @@ export async function getAdminOrderFulfillments(
     throw new ApiClientError(
       response.message || `Order '${orderNumber}' fulfillments not found.`,
       404
+    );
+  }
+
+  return response.data;
+}
+
+/**
+ * Explicit administrator operation to initiate manual fulfillment for a specific line item on a Processing order.
+ * Sends POST /api/admin/orders/{orderNumber}/items/{orderItemId}/manual-fulfillment/start.
+ * Protected by administrator role authorization and CSRF.
+ * Never automatically retried on ambiguous failures.
+ */
+export async function startManualFulfillment(
+  orderNumber: string,
+  orderItemId: number
+): Promise<AdminFulfillmentDto> {
+  if (!orderNumber || !orderNumber.trim()) {
+    throw new ApiClientError('Order number is required.', 400);
+  }
+  if (!orderItemId || orderItemId <= 0 || !Number.isInteger(orderItemId)) {
+    throw new ApiClientError('A valid order item ID is required.', 400);
+  }
+
+  const encodedOrder = encodeURIComponent(orderNumber.trim());
+  const response = await apiRequest<AdminFulfillmentDto>(
+    `/api/admin/orders/${encodedOrder}/items/${orderItemId}/manual-fulfillment/start`,
+    {
+      method: 'POST',
+    }
+  );
+
+  if (!response.data) {
+    throw new ApiClientError(
+      response.message || 'Failed to start manual fulfillment.',
+      500
+    );
+  }
+
+  return response.data;
+}
+
+/**
+ * Explicit administrator operation to confirm manual fulfillment completion after delivery via an external process.
+ * Sends POST /api/admin/orders/{orderNumber}/items/{orderItemId}/manual-fulfillment/complete with evidence payload.
+ * Protected by administrator role authorization and CSRF.
+ * Never automatically retried on ambiguous failures.
+ */
+export async function completeManualFulfillment(
+  orderNumber: string,
+  orderItemId: number,
+  request: AdminCompleteManualFulfillmentRequest
+): Promise<AdminFulfillmentDto> {
+  if (!orderNumber || !orderNumber.trim()) {
+    throw new ApiClientError('Order number is required.', 400);
+  }
+  if (!orderItemId || orderItemId <= 0 || !Number.isInteger(orderItemId)) {
+    throw new ApiClientError('A valid order item ID is required.', 400);
+  }
+  if (!request) {
+    throw new ApiClientError('Fulfillment completion request is required.', 400);
+  }
+  if (!request.confirmDelivered) {
+    throw new ApiClientError(
+      'Explicit confirmation of delivery (ConfirmDelivered = true) is strictly required.',
+      400
+    );
+  }
+
+  const refCheck = validateDeliveryReference(request.deliveryReference);
+  if (!refCheck.isValid) {
+    throw new ApiClientError(refCheck.errorMessage || 'Invalid delivery reference.', 400);
+  }
+
+  const channel = (request.deliveryChannel || '').trim();
+  const isApprovedChannel = APPROVED_DELIVERY_CHANNELS.some(
+    (c) => c.toLowerCase() === channel.toLowerCase()
+  );
+  if (!isApprovedChannel) {
+    throw new ApiClientError(
+      `Invalid delivery channel. Approved channels are: ${APPROVED_DELIVERY_CHANNELS.join(', ')}.`,
+      400
+    );
+  }
+
+  if (request.notes && request.notes.trim()) {
+    const trimmedNote = request.notes.trim();
+    const isApprovedNote = APPROVED_OPERATIONAL_NOTES.some(
+      (n) => n.toLowerCase() === trimmedNote.toLowerCase()
+    );
+    if (!isApprovedNote) {
+      throw new ApiClientError(
+        'Arbitrary free-text notes are prohibited during controlled pilot. Notes must be omitted or selected from approved operational options.',
+        400
+      );
+    }
+  }
+
+  const encodedOrder = encodeURIComponent(orderNumber.trim());
+  const response = await apiRequest<AdminFulfillmentDto>(
+    `/api/admin/orders/${encodedOrder}/items/${orderItemId}/manual-fulfillment/complete`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmDelivered: true,
+        deliveryReference: refCheck.normalized,
+        deliveryChannel: request.deliveryChannel.trim(),
+        notes: request.notes?.trim() ? request.notes.trim() : null,
+      }),
+    }
+  );
+
+  if (!response.data) {
+    throw new ApiClientError(
+      response.message || 'Failed to complete manual fulfillment.',
+      500
     );
   }
 

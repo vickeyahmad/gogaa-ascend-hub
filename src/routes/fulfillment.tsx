@@ -281,6 +281,7 @@ export function FulfillmentManagementView() {
           summaryItem={selectedItem}
           isOpen={isDetailOpen}
           onClose={handleCloseDetail}
+          onFulfillmentUpdated={() => void fetchFulfillments(true, page)}
         />
       </div>
     </AppShell>
